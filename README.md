@@ -30,6 +30,11 @@ sur vos photos existantes.
 - **Studio** — import d'une photo de la photothèque (y compris fichiers
   RAW/DNG, développés via `CIRAWFilter`), choix de l'objectif, réglage
   d'intensité, comparaison avec l'original (appui long), export.
+- **Profondeur (photos Portrait)** — si la photo importée embarque un matte
+  « effets portrait » ou une carte de disparité/profondeur, le bokeh vintage
+  (tourbillon, douceur, bulles) suit l'arrière-plan réel de la scène au lieu
+  du masque radial : le sujet reste net, seul le fond tourbillonne.
+  Désactivable d'un interrupteur dans le Studio.
 - **Objectifs** — catalogue avec l'histoire de chaque objectif, sa signature
   optique détaillée et un aperçu de bokeh simulé sur une scène de test.
 
