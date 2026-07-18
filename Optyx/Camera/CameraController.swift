@@ -5,7 +5,8 @@ import UIKit
 
 /// Gère la session de capture : flux vidéo filtré en temps réel
 /// par le moteur de rendu, profondeur en direct (LiDAR / double capteur),
-/// et prise de photo plein format avec Apple ProRAW / RAW (DNG).
+/// prise de photo plein format avec Apple ProRAW / RAW (DNG), et
+/// enregistrement vidéo avec la simulation appliquée.
 final class CameraController: NSObject, ObservableObject {
 
     enum Status {
@@ -15,10 +16,20 @@ final class CameraController: NSObject, ObservableObject {
         case unavailable
     }
 
+    enum CaptureMode {
+        case photo
+        case video
+    }
+
     @Published var status: Status = .idle
     @Published var lastCaptureSaved = false
     /// Passe à vrai dès que la première trame filtrée est affichée.
     @Published var hasFrame = false
+
+    /// Photo ou vidéo (change le rôle du déclencheur).
+    @Published var mode: CaptureMode = .photo
+    @Published var isRecording = false
+    @Published var recordingSeconds = 0
 
     /// Affichage Metal du viseur : reçoit les trames déjà rendues.
     let previewRenderer = PreviewRenderer()
@@ -44,6 +55,7 @@ final class CameraController: NSObject, ObservableObject {
     private let videoQueue = DispatchQueue(label: "optyx.camera.video")
     private let videoOutput = AVCaptureVideoDataOutput()
     private let depthOutput = AVCaptureDepthDataOutput()
+    private let audioOutput = AVCaptureAudioDataOutput()
     private let photoOutput = AVCapturePhotoOutput()
     /// Synchronise vidéo + profondeur quand la caméra fournit les deux.
     private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
@@ -56,8 +68,15 @@ final class CameraController: NSObject, ObservableObject {
     private var pendingProcessedData: Data?
     private var pendingDepthData: AVDepthData?
 
-    /// Plus grand côté des images de prévisualisation (compromis fluidité/qualité).
-    private let previewMaxDimension: CGFloat = 900
+    /// Plus grand côté du flux traité : 900 px pour la prévisualisation,
+    /// 1440 px pendant un enregistrement vidéo (qualité du fichier produit).
+    private var processingMaxDimension: CGFloat { recordingActive ? 1440 : 900 }
+
+    /// Enregistrement vidéo. `recordingActive` est le miroir de `isRecording`
+    /// côté `videoQueue` ; le recorder est créé à la première trame.
+    private var recorder: VideoRecorder?
+    private var recordingActive = false
+    private var recordingTimer: Timer?
 
     /// Cache de la plage de profondeur du flux direct : la mesure min/max
     /// (aller-retour GPU→CPU) n'est refaite qu'une image sur
@@ -96,6 +115,7 @@ final class CameraController: NSObject, ObservableObject {
     }
 
     func stop() {
+        if isRecording { stopRecording() }
         sessionQueue.async { [session] in
             if session.isRunning { session.stopRunning() }
         }
@@ -145,6 +165,18 @@ final class CameraController: NSObject, ObservableObject {
 
         guard session.canAddOutput(photoOutput) else { return false }
         session.addOutput(photoOutput)
+
+        // Micro pour le mode vidéo ; l'app fonctionne sans si l'accès
+        // est refusé (vidéo muette).
+        if let microphone = AVCaptureDevice.default(for: .audio),
+           let audioInput = try? AVCaptureDeviceInput(device: microphone),
+           session.canAddInput(audioInput) {
+            session.addInput(audioInput)
+        }
+        if session.canAddOutput(audioOutput) {
+            session.addOutput(audioOutput)
+            audioOutput.setSampleBufferDelegate(self, queue: videoQueue)
+        }
 
         // Profondeur en direct : sortie dédiée synchronisée avec la vidéo.
         var depthConfigured = false
@@ -206,8 +238,8 @@ final class CameraController: NSObject, ObservableObject {
         var image = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
 
         let largest = max(image.extent.width, image.extent.height)
-        if largest > previewMaxDimension {
-            let scale = previewMaxDimension / largest
+        if largest > processingMaxDimension {
+            let scale = processingMaxDimension / largest
             image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         }
 
@@ -222,6 +254,18 @@ final class CameraController: NSObject, ObservableObject {
                                          colorSpace: CGColorSpaceCreateDeviceRGB())
         previewRenderer.present(CIImage(cvPixelBuffer: buffer))
 
+        // Le même buffer déjà rendu alimente l'enregistrement vidéo :
+        // aucun rendu supplémentaire.
+        if recordingActive {
+            if recorder == nil {
+                recorder = VideoRecorder(size: CGSize(
+                    width: CVPixelBufferGetWidth(buffer),
+                    height: CVPixelBufferGetHeight(buffer)))
+            }
+            let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            recorder?.appendVideo(buffer, at: time)
+        }
+
         if !didPublishFirstFrame {
             didPublishFirstFrame = true
             DispatchQueue.main.async { [weak self] in self?.hasFrame = true }
@@ -231,8 +275,9 @@ final class CameraController: NSObject, ObservableObject {
     /// Fournit un pixel buffer compatible Metal à la taille de l'aperçu,
     /// en recréant le pool si la taille change.
     private func makePreviewBuffer(for extent: CGRect) -> CVPixelBuffer? {
-        let width = Int(extent.width.rounded())
-        let height = Int(extent.height.rounded())
+        // Dimensions paires : requis par l'encodeur HEVC du mode vidéo.
+        let width = Int(extent.width.rounded()) & ~1
+        let height = Int(extent.height.rounded()) & ~1
         guard width > 0, height > 0 else { return nil }
 
         let size = CGSize(width: width, height: height)
@@ -321,6 +366,63 @@ final class CameraController: NSObject, ObservableObject {
             photoOutput.isDepthDataDeliveryEnabled && depthEnabled
         return settings
     }
+
+    // MARK: - Enregistrement vidéo
+
+    func toggleRecording() {
+        isRecording ? stopRecording() : startRecording()
+    }
+
+    private func startRecording() {
+        guard status == .running, !isRecording else { return }
+        videoQueue.async { [weak self] in
+            self?.recordingActive = true
+        }
+        isRecording = true
+        recordingSeconds = 0
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self?.recordingSeconds += 1
+        }
+    }
+
+    private func stopRecording() {
+        guard isRecording else { return }
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+        isRecording = false
+        videoQueue.async { [weak self] in
+            guard let self else { return }
+            self.recordingActive = false
+            let recorder = self.recorder
+            self.recorder = nil
+            recorder?.finish { [weak self] url in
+                guard let url else { return }
+                self?.saveVideo(at: url)
+            }
+        }
+    }
+
+    /// Enregistre la vidéo filtrée dans Photos puis supprime le temporaire.
+    private func saveVideo(at url: URL) {
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] authStatus in
+            guard authStatus == .authorized || authStatus == .limited else {
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
+            PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+            } completionHandler: { success, _ in
+                try? FileManager.default.removeItem(at: url)
+                guard success else { return }
+                DispatchQueue.main.async {
+                    self?.lastCaptureSaved = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                        self?.lastCaptureSaved = false
+                    }
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Flux synchronisé vidéo + profondeur
@@ -345,13 +447,18 @@ extension CameraController: AVCaptureDataOutputSynchronizerDelegate {
     }
 }
 
-// MARK: - Flux vidéo seul (caméra sans profondeur)
+// MARK: - Flux vidéo seul (caméra sans profondeur) et micro
 
-extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
+extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate,
+                            AVCaptureAudioDataOutputSampleBufferDelegate {
 
     func captureOutput(_ output: AVCaptureOutput,
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
+        if output === audioOutput {
+            recorder?.appendAudio(sampleBuffer)
+            return
+        }
         processVideoFrame(sampleBuffer, depthMask: nil)
     }
 }
