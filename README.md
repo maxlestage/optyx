@@ -58,12 +58,16 @@ défaut caractéristique, dosé par le profil de l'objectif :
   carte de profondeur, trois couches de bulles (petites, moyennes, larges)
   sont réparties en bandes de distance : le diamètre des anneaux croît avec
   l'éloignement du plan de netteté, comme sur un vrai objectif.
-- **Glow / halation** — bloom sur les hautes lumières.
+- **Glow / halation** — bloom sur les hautes lumières ; avec une carte de
+  profondeur, atténué sur le sujet et plein sur l'arrière-plan.
 - **Aberration chromatique** — dilatation/contraction différentielle des
-  canaux rouge et bleu autour du centre.
+  canaux rouge et bleu autour du centre ; avec une carte de profondeur, le
+  décalage des franges est mis à l'échelle par bande de distance.
+- **Vignettage** — assombrissement des coins ; avec une carte de profondeur,
+  le sujet n'est que partiellement assombri.
 - **Verre au thorium** — dérive de température de couleur vers le jaune doré.
 - **Voile vintage** — noirs levés, contraste et saturation réduits.
-- **Vignettage, douceur de bords, grain** — filtres dédiés dosés par profil.
+- **Douceur de bords, grain** — filtres dédiés dosés par profil.
 
 ## Lancer le projet
 

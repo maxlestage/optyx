@@ -45,9 +45,12 @@ final class LensEngine {
                                 customMask: depthMask)
         img = applyBubbleBokeh(img, lens: lens, k: k, extent: extent, dim: dim,
                                customMask: depthMask)
-        img = applyGlow(img, lens: lens, k: k, dim: dim, extent: extent)
-        img = applyChromaticAberration(img, lens: lens, k: k, extent: extent, center: center)
-        img = applyVignette(img, lens: lens, k: k, center: center, dim: dim)
+        img = applyGlow(img, lens: lens, k: k, dim: dim, extent: extent,
+                        customMask: depthMask)
+        img = applyChromaticAberration(img, lens: lens, k: k, extent: extent, center: center,
+                                       customMask: depthMask)
+        img = applyVignette(img, lens: lens, k: k, center: center, dim: dim,
+                            extent: extent, customMask: depthMask)
         img = applyGrain(img, lens: lens, k: k, extent: extent)
 
         return img.cropped(to: extent)
@@ -245,54 +248,91 @@ final class LensEngine {
     }
 
     /// Halo lumineux / voile onirique autour des hautes lumières.
+    /// Avec une carte de profondeur, le halo est atténué sur le sujet
+    /// et plein sur l'arrière-plan.
     private func applyGlow(_ img: CIImage, lens: LensProfile, k: Double,
-                           dim: CGFloat, extent: CGRect) -> CIImage {
+                           dim: CGFloat, extent: CGRect,
+                           customMask: CIImage? = nil) -> CIImage {
         let strength = lens.glow * k
         guard strength > 0.02 else { return img }
         let bloom = CIFilter.bloom()
         bloom.inputImage = img.clampedToExtent()
         bloom.intensity = Float(0.9 * strength)
         bloom.radius = Float(dim * 0.02 * (0.5 + strength))
-        return bloom.outputImage?.cropped(to: extent) ?? img
+        guard let bloomed = bloom.outputImage?.cropped(to: extent) else { return img }
+
+        guard let customMask else { return bloomed }
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = bloomed
+        blend.backgroundImage = img
+        blend.maskImage = boosted(customMask, floor: 0.35)
+        return blend.outputImage ?? bloomed
     }
 
     /// Aberration chromatique latérale : les canaux rouge et bleu sont
     /// très légèrement dilatés/contractés autour du centre.
+    /// Avec une carte de profondeur, le décalage des franges croît
+    /// réellement avec la distance au plan de netteté.
     private func applyChromaticAberration(_ img: CIImage, lens: LensProfile, k: Double,
-                                          extent: CGRect, center: CGPoint) -> CIImage {
+                                          extent: CGRect, center: CGPoint,
+                                          customMask: CIImage? = nil) -> CIImage {
         let strength = lens.chroma * k
         guard strength > 0.02 else { return img }
-        let delta = 0.0035 * strength
+        let baseDelta = 0.0035 * strength
 
-        let clamped = img.clampedToExtent()
-        let red = channel(clamped, r: 1, g: 0, b: 0, keepAlpha: false)
-            .transformed(by: scaleAround(center, factor: 1 + delta))
-            .cropped(to: extent)
-        let green = channel(clamped, r: 0, g: 1, b: 0, keepAlpha: true)
-            .cropped(to: extent)
-        let blue = channel(clamped, r: 0, g: 0, b: 1, keepAlpha: false)
-            .transformed(by: scaleAround(center, factor: 1 - delta))
-            .cropped(to: extent)
+        /// Image dont les franges sont décalées d'un delta donné.
+        func aberrated(delta: Double) -> CIImage? {
+            let clamped = img.clampedToExtent()
+            let red = channel(clamped, r: 1, g: 0, b: 0, keepAlpha: false)
+                .transformed(by: scaleAround(center, factor: 1 + delta))
+                .cropped(to: extent)
+            let green = channel(clamped, r: 0, g: 1, b: 0, keepAlpha: true)
+                .cropped(to: extent)
+            let blue = channel(clamped, r: 0, g: 0, b: 1, keepAlpha: false)
+                .transformed(by: scaleAround(center, factor: 1 - delta))
+                .cropped(to: extent)
 
-        let addRG = CIFilter.additionCompositing()
-        addRG.inputImage = red
-        addRG.backgroundImage = green
-        guard let rg = addRG.outputImage else { return img }
+            let addRG = CIFilter.additionCompositing()
+            addRG.inputImage = red
+            addRG.backgroundImage = green
+            guard let rg = addRG.outputImage else { return nil }
 
-        let addRGB = CIFilter.additionCompositing()
-        addRGB.inputImage = blue
-        addRGB.backgroundImage = rg
-        guard let rgb = addRGB.outputImage else { return img }
+            let addRGB = CIFilter.additionCompositing()
+            addRGB.inputImage = blue
+            addRGB.backgroundImage = rg
+            guard let rgb = addRGB.outputImage else { return nil }
 
-        let clamp = CIFilter.colorClamp()
-        clamp.inputImage = rgb
-        clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
-        clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
-        return clamp.outputImage ?? img
+            let clamp = CIFilter.colorClamp()
+            clamp.inputImage = rgb
+            clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
+            clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
+            return clamp.outputImage
+        }
+
+        if let customMask {
+            // Le mélange pondéré de deux images décalées créerait un
+            // dédoublement ; chaque bande reçoit donc sa propre couche
+            // au décalage réellement mis à l'échelle.
+            var out = img
+            for band in depthBands(customMask) {
+                guard let layer = aberrated(delta: baseDelta * band.factor) else { continue }
+                let blend = CIFilter.blendWithMask()
+                blend.inputImage = layer
+                blend.backgroundImage = out
+                blend.maskImage = band.weight
+                out = blend.outputImage ?? out
+            }
+            return out
+        }
+
+        return aberrated(delta: baseDelta) ?? img
     }
 
+    /// Assombrissement des coins ; avec une carte de profondeur, le sujet
+    /// n'est que partiellement assombri, l'arrière-plan l'est pleinement.
     private func applyVignette(_ img: CIImage, lens: LensProfile, k: Double,
-                               center: CGPoint, dim: CGFloat) -> CIImage {
+                               center: CGPoint, dim: CGFloat,
+                               extent: CGRect, customMask: CIImage? = nil) -> CIImage {
         let strength = lens.vignette * k
         guard strength > 0.02 else { return img }
         let filter = CIFilter.vignetteEffect()
@@ -301,7 +341,14 @@ final class LensEngine {
         filter.radius = Float(dim * 0.75)
         filter.intensity = Float(1.1 * strength)
         filter.falloff = 0.5
-        return filter.outputImage ?? img
+        guard let vignetted = filter.outputImage else { return img }
+
+        guard let customMask else { return vignetted }
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = vignetted.cropped(to: extent)
+        blend.backgroundImage = img
+        blend.maskImage = boosted(customMask, floor: 0.5)
+        return blend.outputImage ?? vignetted
     }
 
     /// Grain argentique en incrustation lumière douce.
@@ -375,6 +422,20 @@ final class LensEngine {
 
     private func inverted(_ img: CIImage) -> CIImage {
         img.applyingFilter("CIColorInvert")
+    }
+
+    /// Remonte le plancher d'un masque : `floor` sur le sujet, 1 au loin.
+    /// Un effet mélangé avec ce masque reste partiellement présent partout.
+    private func boosted(_ mask: CIImage, floor: CGFloat) -> CIImage {
+        let scale = 1 - floor
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = mask
+        matrix.rVector = CIVector(x: scale, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: scale, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: scale, w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        matrix.biasVector = CIVector(x: floor, y: floor, z: floor, w: 1)
+        return matrix.outputImage ?? mask
     }
 
     private func multiplied(_ a: CIImage, _ b: CIImage) -> CIImage {
