@@ -1,10 +1,12 @@
 import AVFoundation
 import CoreImage
+import VideoToolbox
 
 /// Écrit la vidéo filtrée en HEVC (.mov) : reçoit les pixel buffers déjà
 /// rendus par le moteur — aucun rendu supplémentaire — et la piste micro
-/// compressée en AAC. Toutes les méthodes sont appelées depuis la file
-/// vidéo de la caméra.
+/// compressée en AAC stéréo. En HDR, l'encodage passe en 10 bits
+/// (HEVC Main10, HLG BT.2020). Toutes les méthodes sont appelées depuis
+/// la file vidéo de la caméra.
 final class VideoRecorder {
 
     let outputURL: URL
@@ -14,7 +16,11 @@ final class VideoRecorder {
     private let adaptor: AVAssetWriterInputPixelBufferAdaptor
     private var sessionStarted = false
 
-    init?(size: CGSize) {
+    /// - Parameters:
+    ///   - size: dimensions des trames (déjà paires).
+    ///   - frameRate: cadence attendue (24 en mode cinéma, 30 sinon).
+    ///   - hdr: encodage 10 bits HLG BT.2020.
+    init?(size: CGSize, frameRate: Int, hdr: Bool) {
         outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("Optyx-\(UUID().uuidString).mov")
         guard size.width > 0, size.height > 0,
@@ -22,26 +28,48 @@ final class VideoRecorder {
         else { return nil }
         self.writer = writer
 
-        let videoSettings: [String: Any] = [
+        // Débit explicite : ~0,15 bit/pixel/s en SDR, majoré de 25 % en HDR.
+        let pixelsPerSecond = Double(size.width * size.height) * Double(frameRate)
+        let bitrate = Int(pixelsPerSecond * (hdr ? 0.19 : 0.15))
+
+        var videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.hevc,
             AVVideoWidthKey: Int(size.width),
             AVVideoHeightKey: Int(size.height),
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: bitrate,
+                AVVideoExpectedSourceFrameRateKey: frameRate,
+                AVVideoMaxKeyFrameIntervalKey: frameRate * 2,
+            ],
         ]
+        if hdr {
+            videoSettings[AVVideoProfileLevelKey] =
+                kVTProfileLevel_HEVC_Main10_AutoLevel as String
+            videoSettings[AVVideoColorPropertiesKey] = [
+                AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_2020,
+                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_2100_HLG,
+                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_2020,
+            ]
+        }
         videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         videoInput.expectsMediaDataInRealTime = true
+
+        let bufferFormat = hdr
+            ? kCVPixelFormatType_ARGB2101010LEPacked
+            : kCVPixelFormatType_32BGRA
         adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: videoInput,
             sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferPixelFormatTypeKey as String: bufferFormat,
                 kCVPixelBufferWidthKey as String: Int(size.width),
                 kCVPixelBufferHeightKey as String: Int(size.height),
             ])
 
         let audioSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVNumberOfChannelsKey: 1,
-            AVSampleRateKey: 44_100,
-            AVEncoderBitRateKey: 96_000,
+            AVNumberOfChannelsKey: 2,
+            AVSampleRateKey: 48_000,
+            AVEncoderBitRateKey: 192_000,
         ]
         audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
         audioInput.expectsMediaDataInRealTime = true

@@ -32,6 +32,7 @@ final class CameraController: NSObject, ObservableObject {
             updateFrameRate()
             updateLetterbox()
             updateFourK()
+            updateHDR()
         }
     }
     @Published var isRecording = false
@@ -44,6 +45,14 @@ final class CameraController: NSObject, ObservableObject {
     /// Mode 4K : enregistrement à 3840 px de plus grand côté avec
     /// stabilisation cinématique. Fonctionne avec tous les profils.
     @Published var fourKEnabled = false
+    /// HDR : capture 10 bits et encodage HEVC Main10 en HLG BT.2020.
+    @Published var hdrEnabled = false
+    /// Verrouillage exposition + mise au point.
+    @Published var exposureFocusLocked = false
+    /// Facteur de zoom courant (1 = grand-angle natif).
+    @Published var zoomFactor: CGFloat = 1
+    /// Caméra frontale active ?
+    @Published var isFrontCamera = false
 
     /// Affichage Metal du viseur : reçoit les trames déjà rendues.
     let previewRenderer = PreviewRenderer()
@@ -102,6 +111,14 @@ final class CameraController: NSObject, ObservableObject {
     private let letterboxRatio: CGFloat = 2.39
     /// Miroir de `fourKEnabled && mode == .video` côté `videoQueue`.
     private var fourKActive = false
+    /// Miroir de `hdrEnabled && mode == .video` côté `videoQueue`.
+    private var hdrActive = false
+    /// Format 10 bits du pool en cours (pour le recréer au changement).
+    private var previewBufferHDR = false
+    /// Position de la caméra et orientation à appliquer aux trames
+    /// (miroir pour la caméra frontale, façon selfie).
+    private var cameraPosition: AVCaptureDevice.Position = .back
+    private var sensorOrientation: CGImagePropertyOrientation = .right
 
     /// Cache de la plage de profondeur du flux direct : la mesure min/max
     /// (aller-retour GPU→CPU) n'est refaite qu'une image sur
@@ -162,6 +179,8 @@ final class CameraController: NSObject, ObservableObject {
                 self.isConfigured = true
             }
             if !self.session.isRunning { self.session.startRunning() }
+            // Stéréo quand le matériel le permet (sinon reste en mono).
+            try? AVAudioSession.sharedInstance().setPreferredInputNumberOfChannels(2)
             DispatchQueue.main.async { self.status = .running }
         }
     }
@@ -170,18 +189,26 @@ final class CameraController: NSObject, ObservableObject {
         session.beginConfiguration()
         defer { session.commitConfiguration() }
 
+        // Repart de zéro (nécessaire lors d'un changement de caméra).
+        session.inputs.forEach { session.removeInput($0) }
+        session.outputs.forEach { session.removeOutput($0) }
+        outputSynchronizer = nil
+
         session.sessionPreset = .photo
 
         // Choisit en priorité une caméra capable de fournir la profondeur.
+        let deviceTypes: [AVCaptureDevice.DeviceType] = cameraPosition == .back
+            ? [.builtInLiDARDepthCamera, .builtInDualWideCamera,
+               .builtInDualCamera, .builtInWideAngleCamera]
+            : [.builtInTrueDepthCamera, .builtInWideAngleCamera]
         let discovery = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.builtInLiDARDepthCamera, .builtInDualWideCamera,
-                          .builtInDualCamera, .builtInWideAngleCamera],
-            mediaType: .video, position: .back)
+            deviceTypes: deviceTypes, mediaType: .video, position: cameraPosition)
         guard let device = discovery.devices.first,
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input) else { return false }
         session.addInput(input)
         videoDevice = device
+        sensorOrientation = cameraPosition == .front ? .leftMirrored : .right
 
         videoOutput.videoSettings =
             [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
@@ -260,8 +287,9 @@ final class CameraController: NSObject, ObservableObject {
         isProcessingFrame = true
         defer { isProcessingFrame = false }
 
-        // Le capteur livre des images en paysage : rotation portrait.
-        var image = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
+        // Le capteur livre des images en paysage : rotation portrait
+        // (avec miroir pour la caméra frontale).
+        var image = CIImage(cvPixelBuffer: pixelBuffer).oriented(sensorOrientation)
 
         let largest = max(image.extent.width, image.extent.height)
         if largest > processingMaxDimension {
@@ -289,18 +317,23 @@ final class CameraController: NSObject, ObservableObject {
         // Exécute la chaîne de filtres une seule fois, dans un pixel buffer ;
         // l'affichage Metal ne fera que recopier cette texture.
         guard let buffer = makePreviewBuffer(for: processed.extent) else { return }
+        let colorSpace = hdrActive
+            ? (CGColorSpace(name: CGColorSpace.itur_2100_HLG) ?? CGColorSpaceCreateDeviceRGB())
+            : CGColorSpaceCreateDeviceRGB()
         LensEngine.shared.context.render(processed, to: buffer,
                                          bounds: processed.extent,
-                                         colorSpace: CGColorSpaceCreateDeviceRGB())
+                                         colorSpace: colorSpace)
         previewRenderer.present(CIImage(cvPixelBuffer: buffer))
 
         // Le même buffer déjà rendu alimente l'enregistrement vidéo :
         // aucun rendu supplémentaire.
         if recordingActive {
             if recorder == nil {
-                recorder = VideoRecorder(size: CGSize(
-                    width: CVPixelBufferGetWidth(buffer),
-                    height: CVPixelBufferGetHeight(buffer)))
+                recorder = VideoRecorder(
+                    size: CGSize(width: CVPixelBufferGetWidth(buffer),
+                                 height: CVPixelBufferGetHeight(buffer)),
+                    frameRate: cineMode ? 24 : 30,
+                    hdr: hdrActive)
             }
             let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
             recorder?.appendVideo(buffer, at: time)
@@ -321,14 +354,20 @@ final class CameraController: NSObject, ObservableObject {
         guard width > 0, height > 0 else { return nil }
 
         let size = CGSize(width: width, height: height)
-        if previewBufferPool == nil || previewBufferSize != size {
+        if previewBufferPool == nil || previewBufferSize != size
+            || previewBufferHDR != hdrActive {
+            // 10 bits en HDR, BGRA 8 bits sinon.
+            let pixelFormat = hdrActive
+                ? kCVPixelFormatType_ARGB2101010LEPacked
+                : kCVPixelFormatType_32BGRA
             let attributes: [String: Any] = [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
                 kCVPixelBufferWidthKey as String: width,
                 kCVPixelBufferHeightKey as String: height,
                 kCVPixelBufferMetalCompatibilityKey as String: true,
                 kCVPixelBufferIOSurfacePropertiesKey as String: [:],
             ]
+            previewBufferHDR = hdrActive
             let poolAttributes: [String: Any] = [
                 kCVPixelBufferPoolMinimumBufferCountKey as String: 3,
             ]
@@ -348,10 +387,11 @@ final class CameraController: NSObject, ObservableObject {
     /// Convertit une carte de profondeur AVFoundation en masque
     /// d'arrière-plan (blanc = loin) orienté comme la prévisualisation.
     /// Version complète (mesure de plage incluse), pour la capture photo.
-    private static func backgroundMask(from depthData: AVDepthData) -> CIImage? {
+    private static func backgroundMask(from depthData: AVDepthData,
+                                       orientation: CGImagePropertyOrientation) -> CIImage? {
         let disparity = depthData.converting(
             toDepthDataType: kCVPixelFormatType_DisparityFloat32)
-        let map = CIImage(cvPixelBuffer: disparity.depthDataMap).oriented(.right)
+        let map = CIImage(cvPixelBuffer: disparity.depthDataMap).oriented(orientation)
         return DepthExtractor.normalizedFarMask(map, farIsSmall: true)
     }
 
@@ -360,7 +400,7 @@ final class CameraController: NSObject, ObservableObject {
     private func liveBackgroundMask(from depthData: AVDepthData) -> CIImage? {
         let disparity = depthData.converting(
             toDepthDataType: kCVPixelFormatType_DisparityFloat32)
-        let map = CIImage(cvPixelBuffer: disparity.depthDataMap).oriented(.right)
+        let map = CIImage(cvPixelBuffer: disparity.depthDataMap).oriented(sensorOrientation)
 
         depthFrameCounter += 1
         if cachedDepthRange == nil
@@ -457,6 +497,105 @@ final class CameraController: NSObject, ObservableObject {
                   connection.isVideoStabilizationSupported else { return }
             connection.preferredVideoStabilizationMode = active ? .cinematic : .off
         }
+    }
+
+    /// Bascule le HDR (HLG 10 bits) — verrouillé pendant un enregistrement.
+    func toggleHDR() {
+        guard !isRecording else { return }
+        hdrEnabled.toggle()
+        updateHDR()
+    }
+
+    /// En HDR : trames capteur 10 bits (si disponibles), HDR vidéo du
+    /// capteur activé, pool et encodage 10 bits. Sinon, retour au BGRA 8 bits.
+    private func updateHDR() {
+        let active = hdrEnabled && mode == .video
+        videoQueue.async { [weak self] in
+            self?.hdrActive = active
+        }
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            self.session.beginConfiguration()
+            let tenBit = kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+            let format: OSType = (active && self.videoOutput
+                .availableVideoPixelFormatTypes.contains(tenBit))
+                ? tenBit : kCVPixelFormatType_32BGRA
+            self.videoOutput.videoSettings =
+                [kCVPixelBufferPixelFormatTypeKey as String: format]
+            self.session.commitConfiguration()
+
+            if let device = self.videoDevice,
+               device.activeFormat.isVideoHDRSupported,
+               (try? device.lockForConfiguration()) != nil {
+                device.automaticallyAdjustsVideoHDREnabled = false
+                device.isVideoHDREnabled = active
+                device.unlockForConfiguration()
+            }
+        }
+    }
+
+    // MARK: - Exposition, mise au point, zoom, caméra
+
+    /// Verrouille (ou libère) l'exposition et la mise au point.
+    func toggleExposureFocusLock() {
+        exposureFocusLocked.toggle()
+        let locked = exposureFocusLocked
+        sessionQueue.async { [weak self] in
+            guard let self, let device = self.videoDevice,
+                  (try? device.lockForConfiguration()) != nil else { return }
+            defer { device.unlockForConfiguration() }
+            if locked {
+                if device.isFocusModeSupported(.locked) { device.focusMode = .locked }
+                if device.isExposureModeSupported(.locked) { device.exposureMode = .locked }
+            } else {
+                if device.isFocusModeSupported(.continuousAutoFocus) {
+                    device.focusMode = .continuousAutoFocus
+                }
+                if device.isExposureModeSupported(.continuousAutoExposure) {
+                    device.exposureMode = .continuousAutoExposure
+                }
+            }
+        }
+    }
+
+    /// Zoom optique/numérique continu (pincement dans le viseur).
+    func setZoom(_ factor: CGFloat) {
+        let clamped = max(1, min(factor, 8))
+        zoomFactor = clamped
+        sessionQueue.async { [weak self] in
+            guard let self, let device = self.videoDevice,
+                  (try? device.lockForConfiguration()) != nil else { return }
+            defer { device.unlockForConfiguration() }
+            device.videoZoomFactor = min(clamped, device.activeFormat.videoMaxZoomFactor)
+        }
+    }
+
+    /// Bascule caméra arrière ↔ frontale (TrueDepth : la profondeur
+    /// reste disponible). Reconstruit la session et réapplique les réglages.
+    func switchCamera() {
+        guard !isRecording else { return }
+        cameraPosition = cameraPosition == .back ? .front : .back
+        isFrontCamera = cameraPosition == .front
+        exposureFocusLocked = false
+        zoomFactor = 1
+        videoQueue.async { [weak self] in
+            self?.cachedDepthRange = nil
+            self?.depthFrameCounter = 0
+        }
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            let wasRunning = self.session.isRunning
+            if wasRunning { self.session.stopRunning() }
+            guard self.configureSession() else {
+                DispatchQueue.main.async { self.status = .unavailable }
+                return
+            }
+            if wasRunning { self.session.startRunning() }
+        }
+        // Réapplique les réglages qui vivent sur l'appareil ou la connexion.
+        updateFrameRate()
+        updateFourK()
+        updateHDR()
     }
 
     /// Cale le capteur sur 24 i/s quand le mode cinéma est actif en vidéo ;
@@ -600,13 +739,16 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
 
         let lens = self.lens
         let intensity = self.intensity
+        let orientation = self.sensorOrientation
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             // Le rendu vintage est "développé" à partir de la version traitée ;
             // le DNG reste, par définition, les données brutes du capteur.
             var vintageData: Data?
             if let processedData, let source = UIImage(data: processedData) {
-                let mask = depthData.flatMap { Self.backgroundMask(from: $0) }
+                let mask = depthData.flatMap {
+                    Self.backgroundMask(from: $0, orientation: orientation)
+                }
                 let normalized = source.normalized(maxDimension: 3200)
                 if let ciImage = CIImage(image: normalized),
                    let rendered = LensEngine.shared.renderUIImage(ciImage,
