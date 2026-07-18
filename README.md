@@ -33,7 +33,9 @@ sur vos photos existantes.
   muette. Pastille **24 i/s** : mode cinéma qui cale le capteur sur
   24 images par seconde pour le rendu de mouvement film ; la cadence
   automatique revient dès qu'on repasse en photo ou qu'on désactive la
-  pastille.
+  pastille. Pastille **2.39:1** : letterbox CinemaScope — le flux est
+  recadré au format large, gravé dans le fichier, avec les bandes noires
+  visibles en direct dans le viseur.
 - **Profondeur en direct** — sur les iPhone à LiDAR ou double capteur, la
   carte de profondeur est capturée en continu (`AVCaptureDepthDataOutput`
   synchronisée avec la vidéo) : dans le viseur comme sur la photo capturée,

@@ -28,13 +28,18 @@ final class CameraController: NSObject, ObservableObject {
 
     /// Photo ou vidéo (change le rôle du déclencheur).
     @Published var mode: CaptureMode = .photo {
-        didSet { updateFrameRate() }
+        didSet {
+            updateFrameRate()
+            updateLetterbox()
+        }
     }
     @Published var isRecording = false
     @Published var recordingSeconds = 0
     /// Mode cinéma : capteur calé à 24 i/s en vidéo, pour le rendu de
     /// mouvement des zooms Angénieux et consorts.
     @Published var cineMode = false
+    /// Letterbox CinemaScope : le flux vidéo est recadré au format 2.39:1.
+    @Published var letterboxEnabled = false
 
     /// Affichage Metal du viseur : reçoit les trames déjà rendues.
     let previewRenderer = PreviewRenderer()
@@ -84,6 +89,10 @@ final class CameraController: NSObject, ObservableObject {
     private var recorder: VideoRecorder?
     private var recordingActive = false
     private var recordingTimer: Timer?
+    /// Miroir de `letterboxEnabled && mode == .video` côté `videoQueue`.
+    private var letterboxActive = false
+    /// Rapport largeur/hauteur du recadrage CinemaScope.
+    private let letterboxRatio: CGFloat = 2.39
 
     /// Cache de la plage de profondeur du flux direct : la mesure min/max
     /// (aller-retour GPU→CPU) n'est refaite qu'une image sur
@@ -251,8 +260,22 @@ final class CameraController: NSObject, ObservableObject {
             image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         }
 
-        let processed = LensEngine.shared.render(image, lens: lens, intensity: intensity,
+        var processed = LensEngine.shared.render(image, lens: lens, intensity: intensity,
                                                  backgroundMask: depthMask)
+
+        // Letterbox CinemaScope : recadrage centré à 2.39:1, gravé dans le
+        // fichier ; le viseur montre naturellement les bandes noires.
+        if letterboxActive {
+            let extent = processed.extent
+            let targetHeight = extent.width / letterboxRatio
+            if targetHeight < extent.height {
+                processed = processed.cropped(to: CGRect(
+                    x: extent.minX,
+                    y: extent.midY - targetHeight / 2,
+                    width: extent.width,
+                    height: targetHeight))
+            }
+        }
 
         // Exécute la chaîne de filtres une seule fois, dans un pixel buffer ;
         // l'affichage Metal ne fera que recopier cette texture.
@@ -386,6 +409,21 @@ final class CameraController: NSObject, ObservableObject {
         guard !isRecording else { return }
         cineMode.toggle()
         updateFrameRate()
+    }
+
+    /// Bascule le letterbox 2.39:1 (verrouillé pendant un enregistrement :
+    /// changer les dimensions en cours de fichier casserait l'encodeur).
+    func toggleLetterbox() {
+        guard !isRecording else { return }
+        letterboxEnabled.toggle()
+        updateLetterbox()
+    }
+
+    private func updateLetterbox() {
+        let active = letterboxEnabled && mode == .video
+        videoQueue.async { [weak self] in
+            self?.letterboxActive = active
+        }
     }
 
     /// Cale le capteur sur 24 i/s quand le mode cinéma est actif en vidéo ;
