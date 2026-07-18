@@ -37,6 +37,7 @@ struct CameraView: View {
                         recordingChip
                     }
                     Spacer()
+                    if camera.mode == .video { cineToggle }
                     if camera.depthAvailable { depthToggle }
                     if camera.rawSupported && camera.mode == .photo { rawToggle }
                 }
@@ -62,6 +63,26 @@ struct CameraView: View {
         .onDisappear { camera.stop() }
         .onChange(of: lens) { _, newValue in camera.lens = newValue }
         .onChange(of: intensity) { _, newValue in camera.intensity = newValue }
+    }
+
+    /// Mode cinéma : capteur calé à 24 images par seconde.
+    private var cineToggle: some View {
+        Button {
+            camera.toggleCineMode()
+        } label: {
+            Label("24 i/s", systemImage: "film")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(camera.cineMode
+                                   ? Color.orange.opacity(0.9)
+                                   : Color.white.opacity(0.15))
+                )
+                .foregroundStyle(camera.cineMode ? .black : .white)
+        }
+        .buttonStyle(.plain)
+        .disabled(camera.isRecording)
     }
 
     /// Chronomètre d'enregistrement.

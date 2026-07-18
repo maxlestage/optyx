@@ -30,7 +30,10 @@ sur vos photos existantes.
   déjà rendues pour le viseur alimentent un `AVAssetWriter` (HEVC .mov,
   1440 px, audio micro en AAC) sans aucun rendu supplémentaire. Chronomètre
   à l'écran, fichier enregistré dans Photos. Sans accès micro, la vidéo est
-  muette.
+  muette. Pastille **24 i/s** : mode cinéma qui cale le capteur sur
+  24 images par seconde pour le rendu de mouvement film ; la cadence
+  automatique revient dès qu'on repasse en photo ou qu'on désactive la
+  pastille.
 - **Profondeur en direct** — sur les iPhone à LiDAR ou double capteur, la
   carte de profondeur est capturée en continu (`AVCaptureDepthDataOutput`
   synchronisée avec la vidéo) : dans le viseur comme sur la photo capturée,
