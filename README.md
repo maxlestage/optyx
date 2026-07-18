@@ -52,7 +52,10 @@ défaut caractéristique, dosé par le profil de l'objectif :
   autour du centre (flou tangentiel croissant avec le rayon), masquée pour
   préserver le centre net.
 - **Bulles de savon** — seuillage des hautes lumières, dilatation morphologique
-  en disques puis extraction du contour, incrusté en mode écran.
+  en disques puis extraction du contour, incrusté en mode écran. Avec une
+  carte de profondeur, trois couches de bulles (petites, moyennes, larges)
+  sont réparties en bandes de distance : le diamètre des anneaux croît avec
+  l'éloignement du plan de netteté, comme sur un vrai objectif.
 - **Glow / halation** — bloom sur les hautes lumières.
 - **Aberration chromatique** — dilatation/contraction différentielle des
   canaux rouge et bleu autour du centre.

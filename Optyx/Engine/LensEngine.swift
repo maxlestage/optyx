@@ -160,6 +160,8 @@ final class LensEngine {
 
     /// Bokeh « bulles de savon » : les hautes lumières sont dilatées en
     /// disques dont on ne garde que le contour, incrusté en mode écran.
+    /// Avec une carte de profondeur, le diamètre des bulles croît avec la
+    /// distance au plan de netteté, comme sur un vrai objectif.
     private func applyBubbleBokeh(_ img: CIImage, lens: LensProfile, k: Double,
                                   extent: CGRect, dim: CGFloat,
                                   customMask: CIImage? = nil) -> CIImage {
@@ -177,34 +179,57 @@ final class LensEngine {
         threshold.threshold = 0.80
         guard let highlights = threshold.outputImage else { return img }
 
-        let discRadius = Float(max(4, dim * 0.014))
-        let dilate = CIFilter.morphologyMaximum()
-        dilate.inputImage = highlights.clampedToExtent()
-        dilate.radius = discRadius
-        guard let discs = dilate.outputImage else { return img }
+        let baseRadius = Float(max(4, dim * 0.014))
 
-        let ring = CIFilter.morphologyGradient()
-        ring.inputImage = discs
-        ring.radius = max(1.5, discRadius * 0.18)
-        guard var rings = ring.outputImage else { return img }
+        /// Anneaux construits à partir des hautes lumières pour un diamètre donné.
+        func ringLayer(discRadius: Float) -> CIImage? {
+            let dilate = CIFilter.morphologyMaximum()
+            dilate.inputImage = highlights.clampedToExtent()
+            dilate.radius = discRadius
+            guard let discs = dilate.outputImage else { return nil }
 
-        rings = rings.applyingGaussianBlur(sigma: 1.0).cropped(to: extent)
-        rings = scaled(rings, by: CGFloat(0.75 * strength),
-                       tint: (r: 1.0, g: 0.96, b: 0.88))
+            let ring = CIFilter.morphologyGradient()
+            ring.inputImage = discs
+            ring.radius = max(1.5, discRadius * 0.18)
+            guard var rings = ring.outputImage else { return nil }
 
-        // Avec une carte de profondeur, les bulles n'apparaissent
-        // que sur les hautes lumières de l'arrière-plan.
-        if let customMask {
-            let multiply = CIFilter.multiplyCompositing()
-            multiply.inputImage = rings
-            multiply.backgroundImage = customMask
-            rings = multiply.outputImage?.cropped(to: extent) ?? rings
+            rings = rings.applyingGaussianBlur(sigma: 1.0).cropped(to: extent)
+            return scaled(rings, by: CGFloat(0.75 * strength),
+                          tint: (r: 1.0, g: 0.96, b: 0.88))
         }
 
-        let screen = CIFilter.screenBlendMode()
-        screen.inputImage = rings
-        screen.backgroundImage = img
-        return screen.outputImage ?? img
+        guard let customMask else {
+            // Sans profondeur : une seule taille de bulles, partout.
+            guard let rings = ringLayer(discRadius: baseRadius) else { return img }
+            let screen = CIFilter.screenBlendMode()
+            screen.inputImage = rings
+            screen.backgroundImage = img
+            return screen.outputImage ?? img
+        }
+
+        // Trois couches de bulles réparties en bandes de profondeur
+        // mutuellement exclusives : proches du plan de netteté → petites,
+        // lointaines → larges. Les rampes se recouvrent pour des fondus doux.
+        let rampNear = ramp(customMask, from: 0.25, to: 0.45)
+        let rampMid = ramp(customMask, from: 0.55, to: 0.70)
+        let rampFar = ramp(customMask, from: 0.80, to: 0.92)
+        let bands: [(radiusFactor: Float, weight: CIImage)] = [
+            (0.6, multiplied(rampNear, inverted(rampMid))),
+            (1.0, multiplied(rampMid, inverted(rampFar))),
+            (1.5, rampFar),
+        ]
+
+        var out = img
+        for band in bands {
+            guard var rings = ringLayer(discRadius: max(3, baseRadius * band.radiusFactor))
+            else { continue }
+            rings = multiplied(rings, band.weight).cropped(to: extent)
+            let screen = CIFilter.screenBlendMode()
+            screen.inputImage = rings
+            screen.backgroundImage = out
+            out = screen.outputImage ?? out
+        }
+        return out
     }
 
     /// Halo lumineux / voile onirique autour des hautes lumières.
@@ -299,6 +324,38 @@ final class LensEngine {
     }
 
     // MARK: - Utilitaires
+
+    /// Rampe linéaire bornée : 0 sous `lo`, 1 au-dessus de `hi`.
+    /// Sert à découper le masque de profondeur en bandes de distance.
+    private func ramp(_ mask: CIImage, from lo: CGFloat, to hi: CGFloat) -> CIImage {
+        let scale = 1 / max(hi - lo, 0.001)
+        let bias = -lo * scale
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = mask
+        matrix.rVector = CIVector(x: scale, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: scale, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: scale, w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        matrix.biasVector = CIVector(x: bias, y: bias, z: bias, w: 1)
+        guard let out = matrix.outputImage else { return mask }
+
+        let clamp = CIFilter.colorClamp()
+        clamp.inputImage = out
+        clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
+        clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
+        return clamp.outputImage ?? out
+    }
+
+    private func inverted(_ img: CIImage) -> CIImage {
+        img.applyingFilter("CIColorInvert")
+    }
+
+    private func multiplied(_ a: CIImage, _ b: CIImage) -> CIImage {
+        let multiply = CIFilter.multiplyCompositing()
+        multiply.inputImage = a
+        multiply.backgroundImage = b
+        return multiply.outputImage ?? a
+    }
 
     /// Redimensionne un masque (ex. carte de profondeur, résolution réduite)
     /// pour qu'il couvre exactement l'étendue de l'image traitée.
