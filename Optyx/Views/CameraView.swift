@@ -38,6 +38,7 @@ struct CameraView: View {
                     }
                     Spacer()
                     if camera.mode == .video { cineToggle }
+                    if camera.mode == .video { letterboxToggle }
                     if camera.depthAvailable { depthToggle }
                     if camera.rawSupported && camera.mode == .photo { rawToggle }
                 }
@@ -80,6 +81,26 @@ struct CameraView: View {
                                    : Color.white.opacity(0.15))
                 )
                 .foregroundStyle(camera.cineMode ? .black : .white)
+        }
+        .buttonStyle(.plain)
+        .disabled(camera.isRecording)
+    }
+
+    /// Letterbox CinemaScope : recadrage du flux vidéo à 2.39:1.
+    private var letterboxToggle: some View {
+        Button {
+            camera.toggleLetterbox()
+        } label: {
+            Text("2.39:1")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(camera.letterboxEnabled
+                                   ? Color.orange.opacity(0.9)
+                                   : Color.white.opacity(0.15))
+                )
+                .foregroundStyle(camera.letterboxEnabled ? .black : .white)
         }
         .buttonStyle(.plain)
         .disabled(camera.isRecording)
