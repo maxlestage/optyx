@@ -50,7 +50,9 @@ défaut caractéristique, dosé par le profil de l'objectif :
 
 - **Bokeh tourbillonnant** — moyenne de copies de l'image légèrement pivotées
   autour du centre (flou tangentiel croissant avec le rayon), masquée pour
-  préserver le centre net.
+  préserver le centre net. Avec une carte de profondeur, l'amplitude du
+  tourbillon est graduée sur trois bandes de distance : discret juste
+  derrière le sujet, maximal au loin.
 - **Bulles de savon** — seuillage des hautes lumières, dilatation morphologique
   en disques puis extraction du contour, incrusté en mode écran. Avec une
   carte de profondeur, trois couches de bulles (petites, moyennes, larges)
