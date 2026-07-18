@@ -15,9 +15,13 @@ final class CameraController: NSObject, ObservableObject {
         case unavailable
     }
 
-    @Published var previewFrame: UIImage?
     @Published var status: Status = .idle
     @Published var lastCaptureSaved = false
+    /// Passe à vrai dès que la première trame filtrée est affichée.
+    @Published var hasFrame = false
+
+    /// Affichage Metal du viseur : reçoit les trames déjà rendues.
+    let previewRenderer = PreviewRenderer()
 
     /// La capture RAW est-elle disponible sur cet appareil ?
     @Published var rawSupported = false
@@ -63,6 +67,13 @@ final class CameraController: NSObject, ObservableObject {
     private var depthFrameCounter = 0
     private let depthRangeRefreshInterval = 5
 
+    /// Pool de pixel buffers dans lesquels la chaîne de filtres est rendue
+    /// une seule fois par trame ; le renderer Metal ne fait que les afficher.
+    /// Accédé uniquement depuis `videoQueue`.
+    private var previewBufferPool: CVPixelBufferPool?
+    private var previewBufferSize = CGSize.zero
+    private var didPublishFirstFrame = false
+
     // MARK: - Cycle de vie
 
     func start() {
@@ -88,7 +99,11 @@ final class CameraController: NSObject, ObservableObject {
         sessionQueue.async { [session] in
             if session.isRunning { session.stopRunning() }
         }
-        DispatchQueue.main.async { self.status = .idle }
+        videoQueue.async { [weak self] in self?.didPublishFirstFrame = false }
+        DispatchQueue.main.async {
+            self.status = .idle
+            self.hasFrame = false
+        }
     }
 
     private func configureAndRun() {
@@ -198,13 +213,51 @@ final class CameraController: NSObject, ObservableObject {
 
         let processed = LensEngine.shared.render(image, lens: lens, intensity: intensity,
                                                  backgroundMask: depthMask)
-        guard let cgImage = LensEngine.shared.context
-            .createCGImage(processed, from: processed.extent) else { return }
-        let uiImage = UIImage(cgImage: cgImage)
 
-        DispatchQueue.main.async { [weak self] in
-            self?.previewFrame = uiImage
+        // Exécute la chaîne de filtres une seule fois, dans un pixel buffer ;
+        // l'affichage Metal ne fera que recopier cette texture.
+        guard let buffer = makePreviewBuffer(for: processed.extent) else { return }
+        LensEngine.shared.context.render(processed, to: buffer,
+                                         bounds: processed.extent,
+                                         colorSpace: CGColorSpaceCreateDeviceRGB())
+        previewRenderer.present(CIImage(cvPixelBuffer: buffer))
+
+        if !didPublishFirstFrame {
+            didPublishFirstFrame = true
+            DispatchQueue.main.async { [weak self] in self?.hasFrame = true }
         }
+    }
+
+    /// Fournit un pixel buffer compatible Metal à la taille de l'aperçu,
+    /// en recréant le pool si la taille change.
+    private func makePreviewBuffer(for extent: CGRect) -> CVPixelBuffer? {
+        let width = Int(extent.width.rounded())
+        let height = Int(extent.height.rounded())
+        guard width > 0, height > 0 else { return nil }
+
+        let size = CGSize(width: width, height: height)
+        if previewBufferPool == nil || previewBufferSize != size {
+            let attributes: [String: Any] = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: width,
+                kCVPixelBufferHeightKey as String: height,
+                kCVPixelBufferMetalCompatibilityKey as String: true,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+            ]
+            let poolAttributes: [String: Any] = [
+                kCVPixelBufferPoolMinimumBufferCountKey as String: 3,
+            ]
+            var pool: CVPixelBufferPool?
+            CVPixelBufferPoolCreate(nil, poolAttributes as CFDictionary,
+                                    attributes as CFDictionary, &pool)
+            previewBufferPool = pool
+            previewBufferSize = size
+        }
+
+        guard let pool = previewBufferPool else { return nil }
+        var buffer: CVPixelBuffer?
+        CVPixelBufferPoolCreateBuffer(nil, pool, &buffer)
+        return buffer
     }
 
     /// Convertit une carte de profondeur AVFoundation en masque
