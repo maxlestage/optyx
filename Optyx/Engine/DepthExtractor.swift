@@ -34,7 +34,8 @@ enum DepthExtractor {
 
     /// Normalise une carte de profondeur/disparité en masque 0…1 où
     /// l'arrière-plan (loin) tend vers le blanc.
-    private static func normalizedFarMask(_ map: CIImage, farIsSmall: Bool) -> CIImage? {
+    /// Utilisé aussi par la caméra pour la profondeur en direct.
+    static func normalizedFarMask(_ map: CIImage, farIsSmall: Bool) -> CIImage? {
         guard !map.extent.isEmpty, !map.extent.isInfinite else { return nil }
 
         let minMax = CIFilter(name: "CIAreaMinMax", parameters: [

@@ -35,10 +35,11 @@ struct CameraView: View {
             }
 
             VStack {
-                if camera.rawSupported {
-                    HStack {
+                if camera.rawSupported || camera.depthAvailable {
+                    HStack(spacing: 8) {
                         Spacer()
-                        rawToggle
+                        if camera.depthAvailable { depthToggle }
+                        if camera.rawSupported { rawToggle }
                     }
                     .padding(.horizontal)
                     .padding(.top, 4)
@@ -63,6 +64,26 @@ struct CameraView: View {
         .onDisappear { camera.stop() }
         .onChange(of: lens) { _, newValue in camera.lens = newValue }
         .onChange(of: intensity) { _, newValue in camera.intensity = newValue }
+    }
+
+    /// Active le bokeh guidé par la profondeur en direct (LiDAR / double
+    /// capteur) : le tourbillon ne touche que l'arrière-plan réel.
+    private var depthToggle: some View {
+        Button {
+            camera.depthEnabled.toggle()
+        } label: {
+            Label("Profondeur", systemImage: "person.and.background.dotted")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(camera.depthEnabled
+                                   ? Color.orange.opacity(0.9)
+                                   : Color.white.opacity(0.15))
+                )
+                .foregroundStyle(camera.depthEnabled ? .black : .white)
+        }
+        .buttonStyle(.plain)
     }
 
     /// Active la capture DNG : le fichier RAW original (ProRAW si disponible)

@@ -22,6 +22,11 @@ sur vos photos existantes.
 
 - **Caméra** — viseur temps réel avec le rendu de l'objectif appliqué au flux
   vidéo, capture photo plein format enregistrée dans Photos.
+- **Profondeur en direct** — sur les iPhone à LiDAR ou double capteur, la
+  carte de profondeur est capturée en continu (`AVCaptureDepthDataOutput`
+  synchronisée avec la vidéo) : dans le viseur comme sur la photo capturée,
+  le bokeh vintage ne s'applique qu'à l'arrière-plan réel, le sujet reste
+  net. Pastille « Profondeur » pour revenir au masque radial.
 - **RAW / Apple ProRAW** — bouton RAW dans le viseur : la capture enregistre
   le DNG original (ProRAW sur iPhone 12 Pro et ultérieurs, RAW Bayer sinon)
   joint en ressource alternative à la photo vintage. Le RAW conserve les
