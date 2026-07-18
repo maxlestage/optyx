@@ -15,6 +15,9 @@ struct EditorView: View {
     @State private var showOriginal = false
     @State private var isSaving = false
     @State private var savedBanner = false
+    /// Masque d'arrière-plan extrait de la carte de profondeur (photos Portrait).
+    @State private var depthMask: CIImage?
+    @State private var useDepth = true
 
     var body: some View {
         NavigationStack {
@@ -57,7 +60,12 @@ struct EditorView: View {
 
     /// Identifiant de rendu : tout changement relance le traitement.
     private var processingKey: String {
-        "\(lens.id)-\(intensity)-\(original?.hashValue ?? 0)"
+        "\(lens.id)-\(intensity)-\(useDepth)-\(original?.hashValue ?? 0)"
+    }
+
+    /// Masque effectivement transmis au moteur.
+    private var activeMask: CIImage? {
+        useDepth ? depthMask : nil
     }
 
     // MARK: - Sous-vues
@@ -110,6 +118,17 @@ struct EditorView: View {
     private var controls: some View {
         VStack(spacing: 12) {
             LensChipBar(selected: $lens)
+
+            if depthMask != nil {
+                Toggle(isOn: $useDepth) {
+                    Label("Bokeh selon la profondeur (Portrait)",
+                          systemImage: "person.and.background.dotted")
+                        .font(.caption)
+                }
+                .tint(.orange)
+                .padding(.horizontal)
+            }
+
             HStack(spacing: 12) {
                 Image(systemName: "circle.dashed")
                     .foregroundStyle(.secondary)
@@ -133,8 +152,13 @@ struct EditorView: View {
         Task {
             guard let data = try? await item.loadTransferable(type: Data.self),
                   let image = await decode(data) else { return }
+            let mask = await Task.detached(priority: .userInitiated) {
+                DepthExtractor.backgroundMask(from: data)
+            }.value
             fullResolution = image.normalized(maxDimension: 3200)
             original = image.normalized(maxDimension: 1200)
+            depthMask = mask
+            useDepth = mask != nil
             processed = nil
         }
     }
@@ -156,8 +180,10 @@ struct EditorView: View {
         guard let original, let input = CIImage(image: original) else { return }
         let lens = self.lens
         let intensity = self.intensity
+        let mask = activeMask
         let result = await Task.detached(priority: .userInitiated) {
-            LensEngine.shared.renderUIImage(input, lens: lens, intensity: intensity)
+            LensEngine.shared.renderUIImage(input, lens: lens, intensity: intensity,
+                                            backgroundMask: mask)
         }.value
         if !Task.isCancelled, let result {
             processed = result
@@ -169,8 +195,10 @@ struct EditorView: View {
         isSaving = true
         let lens = self.lens
         let intensity = self.intensity
+        let mask = activeMask
         Task.detached(priority: .userInitiated) {
-            let result = LensEngine.shared.renderUIImage(input, lens: lens, intensity: intensity)
+            let result = LensEngine.shared.renderUIImage(input, lens: lens, intensity: intensity,
+                                                         backgroundMask: mask)
             await MainActor.run {
                 if let result {
                     UIImageWriteToSavedPhotosAlbum(result, nil, nil, nil)

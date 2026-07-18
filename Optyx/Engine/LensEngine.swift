@@ -23,20 +23,28 @@ final class LensEngine {
     ///   - input: image source.
     ///   - lens: profil de l'objectif simulé.
     ///   - intensity: intensité globale de la simulation (0…1).
-    func render(_ input: CIImage, lens: LensProfile, intensity: Double) -> CIImage {
+    ///   - backgroundMask: masque d'arrière-plan (blanc = fond) issu d'une
+    ///     carte de profondeur Portrait ; remplace le masque radial pour le
+    ///     tourbillon, la douceur et les bulles quand il est fourni.
+    func render(_ input: CIImage, lens: LensProfile, intensity: Double,
+                backgroundMask: CIImage? = nil) -> CIImage {
         let extent = input.extent
         guard !extent.isEmpty, intensity > 0 else { return input }
 
         let k = intensity
         let dim = min(extent.width, extent.height)
         let center = CGPoint(x: extent.midX, y: extent.midY)
+        let depthMask = backgroundMask.map { fitMask($0, to: extent) }
         var img = input
 
         img = applyTone(img, lens: lens, k: k)
         img = applyWarmth(img, lens: lens, k: k)
-        img = applySwirl(img, lens: lens, k: k, extent: extent, center: center, dim: dim)
-        img = applyEdgeSoftness(img, lens: lens, k: k, extent: extent, center: center, dim: dim)
-        img = applyBubbleBokeh(img, lens: lens, k: k, extent: extent, dim: dim)
+        img = applySwirl(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
+                         customMask: depthMask)
+        img = applyEdgeSoftness(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
+                                customMask: depthMask)
+        img = applyBubbleBokeh(img, lens: lens, k: k, extent: extent, dim: dim,
+                               customMask: depthMask)
         img = applyGlow(img, lens: lens, k: k, dim: dim, extent: extent)
         img = applyChromaticAberration(img, lens: lens, k: k, extent: extent, center: center)
         img = applyVignette(img, lens: lens, k: k, center: center, dim: dim)
@@ -46,8 +54,10 @@ final class LensEngine {
     }
 
     /// Rend l'image en UIImage (pour affichage ou sauvegarde).
-    func renderUIImage(_ input: CIImage, lens: LensProfile, intensity: Double) -> UIImage? {
-        let output = render(input, lens: lens, intensity: intensity)
+    func renderUIImage(_ input: CIImage, lens: LensProfile, intensity: Double,
+                       backgroundMask: CIImage? = nil) -> UIImage? {
+        let output = render(input, lens: lens, intensity: intensity,
+                            backgroundMask: backgroundMask)
         guard let cg = context.createCGImage(output, from: output.extent) else { return nil }
         return UIImage(cgImage: cg)
     }
@@ -93,7 +103,8 @@ final class LensEngine {
     /// du centre (flou tangentiel croissant avec le rayon), limitée aux bords
     /// par un masque radial pour préserver la netteté du sujet.
     private func applySwirl(_ img: CIImage, lens: LensProfile, k: Double,
-                            extent: CGRect, center: CGPoint, dim: CGFloat) -> CIImage {
+                            extent: CGRect, center: CGPoint, dim: CGFloat,
+                            customMask: CIImage? = nil) -> CIImage {
         let strength = lens.swirl * k
         guard strength > 0.02 else { return img }
 
@@ -124,8 +135,8 @@ final class LensEngine {
             .applyingGaussianBlur(sigma: 1.2 + 2.5 * strength)
             .cropped(to: extent)
 
-        let mask = radialMask(extent: extent, center: center,
-                              inner: dim * 0.20, outer: dim * 0.60)
+        let mask = customMask ?? radialMask(extent: extent, center: center,
+                                            inner: dim * 0.20, outer: dim * 0.60)
         let blend = CIFilter.blendWithMask()
         blend.inputImage = swirled
         blend.backgroundImage = img
@@ -135,13 +146,14 @@ final class LensEngine {
 
     /// Perte de piqué progressive vers les bords du champ.
     private func applyEdgeSoftness(_ img: CIImage, lens: LensProfile, k: Double,
-                                   extent: CGRect, center: CGPoint, dim: CGFloat) -> CIImage {
+                                   extent: CGRect, center: CGPoint, dim: CGFloat,
+                                   customMask: CIImage? = nil) -> CIImage {
         let strength = lens.softness * k
         guard strength > 0.02 else { return img }
         let filter = CIFilter.maskedVariableBlur()
         filter.inputImage = img.clampedToExtent()
-        filter.mask = radialMask(extent: extent, center: center,
-                                 inner: dim * 0.28, outer: dim * 0.72)
+        filter.mask = customMask ?? radialMask(extent: extent, center: center,
+                                               inner: dim * 0.28, outer: dim * 0.72)
         filter.radius = Float(dim * 0.012 * strength)
         return filter.outputImage?.cropped(to: extent) ?? img
     }
@@ -149,7 +161,8 @@ final class LensEngine {
     /// Bokeh « bulles de savon » : les hautes lumières sont dilatées en
     /// disques dont on ne garde que le contour, incrusté en mode écran.
     private func applyBubbleBokeh(_ img: CIImage, lens: LensProfile, k: Double,
-                                  extent: CGRect, dim: CGFloat) -> CIImage {
+                                  extent: CGRect, dim: CGFloat,
+                                  customMask: CIImage? = nil) -> CIImage {
         let strength = lens.bubble * k
         guard strength > 0.02 else { return img }
 
@@ -178,6 +191,15 @@ final class LensEngine {
         rings = rings.applyingGaussianBlur(sigma: 1.0).cropped(to: extent)
         rings = scaled(rings, by: CGFloat(0.75 * strength),
                        tint: (r: 1.0, g: 0.96, b: 0.88))
+
+        // Avec une carte de profondeur, les bulles n'apparaissent
+        // que sur les hautes lumières de l'arrière-plan.
+        if let customMask {
+            let multiply = CIFilter.multiplyCompositing()
+            multiply.inputImage = rings
+            multiply.backgroundImage = customMask
+            rings = multiply.outputImage?.cropped(to: extent) ?? rings
+        }
 
         let screen = CIFilter.screenBlendMode()
         screen.inputImage = rings
@@ -277,6 +299,19 @@ final class LensEngine {
     }
 
     // MARK: - Utilitaires
+
+    /// Redimensionne un masque (ex. carte de profondeur, résolution réduite)
+    /// pour qu'il couvre exactement l'étendue de l'image traitée.
+    private func fitMask(_ mask: CIImage, to extent: CGRect) -> CIImage {
+        let source = mask.extent
+        guard !source.isEmpty, !source.isInfinite else { return mask.cropped(to: extent) }
+        let sx = extent.width / source.width
+        let sy = extent.height / source.height
+        let transform = CGAffineTransform(a: sx, b: 0, c: 0, d: sy,
+                                          tx: extent.minX - source.minX * sx,
+                                          ty: extent.minY - source.minY * sy)
+        return mask.transformed(by: transform).cropped(to: extent)
+    }
 
     /// Masque radial : noir au centre (image nette), blanc vers les bords.
     private func radialMask(extent: CGRect, center: CGPoint,
