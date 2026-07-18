@@ -4,8 +4,8 @@ import Photos
 import UIKit
 
 /// Gère la session de capture : flux vidéo filtré en temps réel
-/// par le moteur de rendu, et prise de photo plein format —
-/// avec capture Apple ProRAW / RAW (DNG) quand l'appareil le permet.
+/// par le moteur de rendu, profondeur en direct (LiDAR / double capteur),
+/// et prise de photo plein format avec Apple ProRAW / RAW (DNG).
 final class CameraController: NSObject, ObservableObject {
 
     enum Status {
@@ -26,6 +26,11 @@ final class CameraController: NSObject, ObservableObject {
     /// Capture RAW activée par l'utilisateur.
     @Published var rawEnabled = false
 
+    /// La caméra fournit-elle une carte de profondeur en direct ?
+    @Published var depthAvailable = false
+    /// Bokeh guidé par la profondeur activé par l'utilisateur.
+    @Published var depthEnabled = true
+
     /// Profil et intensité appliqués au flux (modifiables depuis l'UI).
     var lens: LensProfile = .catalog[1]
     var intensity: Double = 1.0
@@ -34,14 +39,18 @@ final class CameraController: NSObject, ObservableObject {
     private let sessionQueue = DispatchQueue(label: "optyx.camera.session")
     private let videoQueue = DispatchQueue(label: "optyx.camera.video")
     private let videoOutput = AVCaptureVideoDataOutput()
+    private let depthOutput = AVCaptureDepthDataOutput()
     private let photoOutput = AVCapturePhotoOutput()
+    /// Synchronise vidéo + profondeur quand la caméra fournit les deux.
+    private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
     private var isConfigured = false
     private var isProcessingFrame = false
 
     /// Données accumulées pendant une capture (le RAW et le développé
-    /// arrivent dans deux callbacks séparés).
+    /// arrivent dans des callbacks séparés).
     private var pendingRawData: Data?
     private var pendingProcessedData: Data?
+    private var pendingDepthData: AVDepthData?
 
     /// Plus grand côté des images de prévisualisation (compromis fluidité/qualité).
     private let previewMaxDimension: CGFloat = 900
@@ -91,8 +100,12 @@ final class CameraController: NSObject, ObservableObject {
 
         session.sessionPreset = .photo
 
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera,
-                                                   for: .video, position: .back),
+        // Choisit en priorité une caméra capable de fournir la profondeur.
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInLiDARDepthCamera, .builtInDualWideCamera,
+                          .builtInDualCamera, .builtInWideAngleCamera],
+            mediaType: .video, position: .back)
+        guard let device = discovery.devices.first,
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input) else { return false }
         session.addInput(input)
@@ -100,63 +113,63 @@ final class CameraController: NSObject, ObservableObject {
         videoOutput.videoSettings =
             [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         videoOutput.alwaysDiscardsLateVideoFrames = true
-        videoOutput.setSampleBufferDelegate(self, queue: videoQueue)
         guard session.canAddOutput(videoOutput) else { return false }
         session.addOutput(videoOutput)
 
         guard session.canAddOutput(photoOutput) else { return false }
         session.addOutput(photoOutput)
 
+        // Profondeur en direct : sortie dédiée synchronisée avec la vidéo.
+        var depthConfigured = false
+        if !device.activeFormat.supportedDepthDataFormats.isEmpty,
+           session.canAddOutput(depthOutput) {
+            session.addOutput(depthOutput)
+            depthOutput.isFilteringEnabled = true
+            depthOutput.connection(with: .depthData)?.isEnabled = true
+
+            // Format float16 le plus fin proposé par la caméra.
+            let preferred = device.activeFormat.supportedDepthDataFormats.last {
+                let subtype = CMFormatDescriptionGetMediaSubType($0.formatDescription)
+                return subtype == kCVPixelFormatType_DisparityFloat16
+                    || subtype == kCVPixelFormatType_DepthFloat16
+            }
+            if let preferred, (try? device.lockForConfiguration()) != nil {
+                device.activeDepthDataFormat = preferred
+                device.unlockForConfiguration()
+            }
+
+            let synchronizer = AVCaptureDataOutputSynchronizer(
+                dataOutputs: [videoOutput, depthOutput])
+            synchronizer.setDelegate(self, queue: videoQueue)
+            outputSynchronizer = synchronizer
+            depthConfigured = true
+        } else {
+            videoOutput.setSampleBufferDelegate(self, queue: videoQueue)
+        }
+
         // Active Apple ProRAW quand le matériel le propose (iPhone 12 Pro+),
         // sinon on retombe sur le RAW Bayer si disponible.
         if photoOutput.isAppleProRAWSupported {
             photoOutput.isAppleProRAWEnabled = true
         }
+        if photoOutput.isDepthDataDeliverySupported {
+            photoOutput.isDepthDataDeliveryEnabled = true
+        }
         let rawTypes = photoOutput.availableRawPhotoPixelFormatTypes
         let hasProRAW = rawTypes.contains(where: AVCapturePhotoOutput.isAppleProRAWPixelFormat)
+        let hasDepth = depthConfigured
         DispatchQueue.main.async {
             self.rawSupported = !rawTypes.isEmpty
             self.isProRAW = hasProRAW
+            self.depthAvailable = hasDepth
         }
 
         return true
     }
 
-    // MARK: - Capture photo
+    // MARK: - Traitement d'une image du flux
 
-    func capturePhoto() {
-        sessionQueue.async { [weak self] in
-            guard let self, self.session.isRunning else { return }
-            self.pendingRawData = nil
-            self.pendingProcessedData = nil
-            self.photoOutput.capturePhoto(with: self.makePhotoSettings(), delegate: self)
-        }
-    }
-
-    /// RAW activé : capture DNG (ProRAW de préférence) + version développée
-    /// qui sert de base au rendu vintage. Sinon, capture classique.
-    private func makePhotoSettings() -> AVCapturePhotoSettings {
-        let rawTypes = photoOutput.availableRawPhotoPixelFormatTypes
-        guard rawEnabled, !rawTypes.isEmpty else { return AVCapturePhotoSettings() }
-
-        let rawFormat = rawTypes.first(where: AVCapturePhotoOutput.isAppleProRAWPixelFormat)
-            ?? rawTypes[0]
-        if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
-            return AVCapturePhotoSettings(
-                rawPixelFormatType: rawFormat,
-                processedFormat: [AVVideoCodecKey: AVVideoCodecType.hevc])
-        }
-        return AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
-    }
-}
-
-// MARK: - Flux vidéo
-
-extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
-
-    func captureOutput(_ output: AVCaptureOutput,
-                       didOutput sampleBuffer: CMSampleBuffer,
-                       from connection: AVCaptureConnection) {
+    private func processVideoFrame(_ sampleBuffer: CMSampleBuffer, depthMask: CIImage?) {
         guard !isProcessingFrame,
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         isProcessingFrame = true
@@ -171,7 +184,8 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
             image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         }
 
-        let processed = LensEngine.shared.render(image, lens: lens, intensity: intensity)
+        let processed = LensEngine.shared.render(image, lens: lens, intensity: intensity,
+                                                 backgroundMask: depthMask)
         guard let cgImage = LensEngine.shared.context
             .createCGImage(processed, from: processed.extent) else { return }
         let uiImage = UIImage(cgImage: cgImage)
@@ -179,6 +193,82 @@ extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.previewFrame = uiImage
         }
+    }
+
+    /// Convertit une carte de profondeur AVFoundation en masque
+    /// d'arrière-plan (blanc = loin) orienté comme la prévisualisation.
+    private static func backgroundMask(from depthData: AVDepthData) -> CIImage? {
+        let disparity = depthData.converting(
+            toDepthDataType: kCVPixelFormatType_DisparityFloat32)
+        let map = CIImage(cvPixelBuffer: disparity.depthDataMap).oriented(.right)
+        return DepthExtractor.normalizedFarMask(map, farIsSmall: true)
+    }
+
+    // MARK: - Capture photo
+
+    func capturePhoto() {
+        sessionQueue.async { [weak self] in
+            guard let self, self.session.isRunning else { return }
+            self.pendingRawData = nil
+            self.pendingProcessedData = nil
+            self.pendingDepthData = nil
+            self.photoOutput.capturePhoto(with: self.makePhotoSettings(), delegate: self)
+        }
+    }
+
+    /// RAW activé : capture DNG (ProRAW de préférence) + version développée
+    /// qui sert de base au rendu vintage. Sinon, capture classique avec
+    /// profondeur jointe quand la caméra la fournit.
+    private func makePhotoSettings() -> AVCapturePhotoSettings {
+        let rawTypes = photoOutput.availableRawPhotoPixelFormatTypes
+        if rawEnabled, !rawTypes.isEmpty {
+            let rawFormat = rawTypes.first(where: AVCapturePhotoOutput.isAppleProRAWPixelFormat)
+                ?? rawTypes[0]
+            if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
+                return AVCapturePhotoSettings(
+                    rawPixelFormatType: rawFormat,
+                    processedFormat: [AVVideoCodecKey: AVVideoCodecType.hevc])
+            }
+            return AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
+        }
+
+        let settings = AVCapturePhotoSettings()
+        settings.isDepthDataDeliveryEnabled =
+            photoOutput.isDepthDataDeliveryEnabled && depthEnabled
+        return settings
+    }
+}
+
+// MARK: - Flux synchronisé vidéo + profondeur
+
+extension CameraController: AVCaptureDataOutputSynchronizerDelegate {
+
+    func dataOutputSynchronizer(_ synchronizer: AVCaptureDataOutputSynchronizer,
+                                didOutput synchronizedDataCollection: AVCaptureSynchronizedDataCollection) {
+        guard let syncedVideo = synchronizedDataCollection
+            .synchronizedData(for: videoOutput) as? AVCaptureSynchronizedSampleBufferData,
+              !syncedVideo.sampleBufferWasDropped else { return }
+
+        var depthMask: CIImage?
+        if depthEnabled,
+           let syncedDepth = synchronizedDataCollection
+               .synchronizedData(for: depthOutput) as? AVCaptureSynchronizedDepthData,
+           !syncedDepth.depthDataWasDropped {
+            depthMask = Self.backgroundMask(from: syncedDepth.depthData)
+        }
+
+        processVideoFrame(syncedVideo.sampleBuffer, depthMask: depthMask)
+    }
+}
+
+// MARK: - Flux vidéo seul (caméra sans profondeur)
+
+extension CameraController: AVCaptureVideoDataOutputSampleBufferDelegate {
+
+    func captureOutput(_ output: AVCaptureOutput,
+                       didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        processVideoFrame(sampleBuffer, depthMask: nil)
     }
 }
 
@@ -194,6 +284,7 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
             pendingRawData = data
         } else {
             pendingProcessedData = data
+            pendingDepthData = photo.depthData
         }
     }
 
@@ -202,8 +293,10 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
                      error: Error?) {
         let rawData = pendingRawData
         let processedData = pendingProcessedData
+        let depthData = pendingDepthData
         pendingRawData = nil
         pendingProcessedData = nil
+        pendingDepthData = nil
         guard error == nil, rawData != nil || processedData != nil else { return }
 
         let lens = self.lens
@@ -214,11 +307,13 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
             // le DNG reste, par définition, les données brutes du capteur.
             var vintageData: Data?
             if let processedData, let source = UIImage(data: processedData) {
+                let mask = depthData.flatMap { Self.backgroundMask(from: $0) }
                 let normalized = source.normalized(maxDimension: 3200)
                 if let ciImage = CIImage(image: normalized),
                    let rendered = LensEngine.shared.renderUIImage(ciImage,
                                                                   lens: lens,
-                                                                  intensity: intensity) {
+                                                                  intensity: intensity,
+                                                                  backgroundMask: mask) {
                     vintageData = rendered.jpegData(compressionQuality: 0.92)
                 }
             }
