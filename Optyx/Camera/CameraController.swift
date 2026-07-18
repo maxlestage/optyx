@@ -27,9 +27,14 @@ final class CameraController: NSObject, ObservableObject {
     @Published var hasFrame = false
 
     /// Photo ou vidéo (change le rôle du déclencheur).
-    @Published var mode: CaptureMode = .photo
+    @Published var mode: CaptureMode = .photo {
+        didSet { updateFrameRate() }
+    }
     @Published var isRecording = false
     @Published var recordingSeconds = 0
+    /// Mode cinéma : capteur calé à 24 i/s en vidéo, pour le rendu de
+    /// mouvement des zooms Angénieux et consorts.
+    @Published var cineMode = false
 
     /// Affichage Metal du viseur : reçoit les trames déjà rendues.
     let previewRenderer = PreviewRenderer()
@@ -59,6 +64,8 @@ final class CameraController: NSObject, ObservableObject {
     private let photoOutput = AVCapturePhotoOutput()
     /// Synchronise vidéo + profondeur quand la caméra fournit les deux.
     private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
+    /// Caméra active, conservée pour piloter la cadence (mode cinéma).
+    private var videoDevice: AVCaptureDevice?
     private var isConfigured = false
     private var isProcessingFrame = false
 
@@ -156,6 +163,7 @@ final class CameraController: NSObject, ObservableObject {
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input) else { return false }
         session.addInput(input)
+        videoDevice = device
 
         videoOutput.videoSettings =
             [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
@@ -371,6 +379,35 @@ final class CameraController: NSObject, ObservableObject {
 
     func toggleRecording() {
         isRecording ? stopRecording() : startRecording()
+    }
+
+    /// Bascule le mode cinéma 24 i/s (verrouillé pendant un enregistrement).
+    func toggleCineMode() {
+        guard !isRecording else { return }
+        cineMode.toggle()
+        updateFrameRate()
+    }
+
+    /// Cale le capteur sur 24 i/s quand le mode cinéma est actif en vidéo ;
+    /// sinon, rend la main à la cadence automatique de l'appareil.
+    private func updateFrameRate() {
+        let use24 = cineMode && mode == .video
+        sessionQueue.async { [weak self] in
+            guard let self, let device = self.videoDevice,
+                  (try? device.lockForConfiguration()) != nil else { return }
+            defer { device.unlockForConfiguration() }
+
+            let supports24 = device.activeFormat.videoSupportedFrameRateRanges
+                .contains { $0.minFrameRate <= 24 && 24 <= $0.maxFrameRate }
+            if use24 && supports24 {
+                let frameDuration = CMTime(value: 1, timescale: 24)
+                device.activeVideoMinFrameDuration = frameDuration
+                device.activeVideoMaxFrameDuration = frameDuration
+            } else {
+                device.activeVideoMinFrameDuration = .invalid
+                device.activeVideoMaxFrameDuration = .invalid
+            }
+        }
     }
 
     private func startRecording() {
