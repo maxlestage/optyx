@@ -37,6 +37,7 @@ struct CameraView: View {
                         recordingChip
                     }
                     Spacer()
+                    if camera.mode == .video { fourKToggle }
                     if camera.mode == .video { cineToggle }
                     if camera.mode == .video { letterboxToggle }
                     if camera.depthAvailable { depthToggle }
@@ -81,6 +82,27 @@ struct CameraView: View {
                                    : Color.white.opacity(0.15))
                 )
                 .foregroundStyle(camera.cineMode ? .black : .white)
+        }
+        .buttonStyle(.plain)
+        .disabled(camera.isRecording)
+    }
+
+    /// Mode 4K : enregistrement à 3840 px avec stabilisation cinématique,
+    /// pour tous les profils d'objectifs.
+    private var fourKToggle: some View {
+        Button {
+            camera.toggleFourK()
+        } label: {
+            Text("4K")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(camera.fourKEnabled
+                                   ? Color.orange.opacity(0.9)
+                                   : Color.white.opacity(0.15))
+                )
+                .foregroundStyle(camera.fourKEnabled ? .black : .white)
         }
         .buttonStyle(.plain)
         .disabled(camera.isRecording)
