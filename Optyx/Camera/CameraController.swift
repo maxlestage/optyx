@@ -31,6 +31,7 @@ final class CameraController: NSObject, ObservableObject {
         didSet {
             updateFrameRate()
             updateLetterbox()
+            updateFourK()
         }
     }
     @Published var isRecording = false
@@ -40,6 +41,9 @@ final class CameraController: NSObject, ObservableObject {
     @Published var cineMode = false
     /// Letterbox CinemaScope : le flux vidéo est recadré au format 2.39:1.
     @Published var letterboxEnabled = false
+    /// Mode 4K : enregistrement à 3840 px de plus grand côté avec
+    /// stabilisation cinématique. Fonctionne avec tous les profils.
+    @Published var fourKEnabled = false
 
     /// Affichage Metal du viseur : reçoit les trames déjà rendues.
     let previewRenderer = PreviewRenderer()
@@ -81,8 +85,11 @@ final class CameraController: NSObject, ObservableObject {
     private var pendingDepthData: AVDepthData?
 
     /// Plus grand côté du flux traité : 900 px pour la prévisualisation,
-    /// 1440 px pendant un enregistrement vidéo (qualité du fichier produit).
-    private var processingMaxDimension: CGFloat { recordingActive ? 1440 : 900 }
+    /// 1440 px pendant un enregistrement vidéo, 3840 px en mode 4K.
+    private var processingMaxDimension: CGFloat {
+        guard recordingActive else { return 900 }
+        return fourKActive ? 3840 : 1440
+    }
 
     /// Enregistrement vidéo. `recordingActive` est le miroir de `isRecording`
     /// côté `videoQueue` ; le recorder est créé à la première trame.
@@ -93,6 +100,8 @@ final class CameraController: NSObject, ObservableObject {
     private var letterboxActive = false
     /// Rapport largeur/hauteur du recadrage CinemaScope.
     private let letterboxRatio: CGFloat = 2.39
+    /// Miroir de `fourKEnabled && mode == .video` côté `videoQueue`.
+    private var fourKActive = false
 
     /// Cache de la plage de profondeur du flux direct : la mesure min/max
     /// (aller-retour GPU→CPU) n'est refaite qu'une image sur
@@ -423,6 +432,30 @@ final class CameraController: NSObject, ObservableObject {
         let active = letterboxEnabled && mode == .video
         videoQueue.async { [weak self] in
             self?.letterboxActive = active
+        }
+    }
+
+    /// Bascule le mode 4K + stabilisation cinématique (verrouillé pendant
+    /// un enregistrement : les dimensions ne peuvent pas changer en cours
+    /// de fichier).
+    func toggleFourK() {
+        guard !isRecording else { return }
+        fourKEnabled.toggle()
+        updateFourK()
+    }
+
+    private func updateFourK() {
+        let active = fourKEnabled && mode == .video
+        videoQueue.async { [weak self] in
+            self?.fourKActive = active
+        }
+        // La stabilisation cinématique s'applique à la connexion vidéo :
+        // elle lisse aussi la prévisualisation, pour tous les profils.
+        sessionQueue.async { [weak self] in
+            guard let self,
+                  let connection = self.videoOutput.connection(with: .video),
+                  connection.isVideoStabilizationSupported else { return }
+            connection.preferredVideoStabilizationMode = active ? .cinematic : .off
         }
     }
 

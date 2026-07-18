@@ -35,7 +35,9 @@ sur vos photos existantes.
   automatique revient dès qu'on repasse en photo ou qu'on désactive la
   pastille. Pastille **2.39:1** : letterbox CinemaScope — le flux est
   recadré au format large, gravé dans le fichier, avec les bandes noires
-  visibles en direct dans le viseur.
+  visibles en direct dans le viseur. Pastille **4K** : enregistrement à
+  3840 px de plus grand côté avec **stabilisation cinématique**, pour tous
+  les profils d'objectifs (1440 px et stabilisation désactivée sinon).
 - **Profondeur en direct** — sur les iPhone à LiDAR ou double capteur, la
   carte de profondeur est capturée en continu (`AVCaptureDepthDataOutput`
   synchronisée avec la vidéo) : dans le viseur comme sur la photo capturée,
