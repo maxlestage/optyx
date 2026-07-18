@@ -102,6 +102,8 @@ final class LensEngine {
     /// Bokeh tourbillonnant : moyenne de copies légèrement pivotées autour
     /// du centre (flou tangentiel croissant avec le rayon), limitée aux bords
     /// par un masque radial pour préserver la netteté du sujet.
+    /// Avec une carte de profondeur, l'amplitude du tourbillon croît avec
+    /// la distance au plan de netteté.
     private func applySwirl(_ img: CIImage, lens: LensProfile, k: Double,
                             extent: CGRect, center: CGPoint, dim: CGFloat,
                             customMask: CIImage? = nil) -> CIImage {
@@ -109,34 +111,54 @@ final class LensEngine {
         guard strength > 0.02 else { return img }
 
         let clamped = img.clampedToExtent()
-        let maxAngle = 0.045 * strength
         let offsets: [Double] = [-1.0, -0.6, -0.2, 0.2, 0.6, 1.0]
         let weight = CGFloat(1.0 / Double(offsets.count))
 
-        var accumulated: CIImage?
-        for offset in offsets {
-            let angle = CGFloat(offset * maxAngle)
-            let transform = CGAffineTransform(translationX: center.x, y: center.y)
-                .rotated(by: angle)
-                .translatedBy(x: -center.x, y: -center.y)
-            let rotated = clamped.transformed(by: transform).cropped(to: extent)
-            let weighted = scaled(rotated, by: weight)
-            if let acc = accumulated {
-                let add = CIFilter.additionCompositing()
-                add.inputImage = weighted
-                add.backgroundImage = acc
-                accumulated = add.outputImage
-            } else {
-                accumulated = weighted
+        /// Copie tourbillonnée pour une amplitude donnée (1 = nominale).
+        func swirledLayer(amplitude: Double) -> CIImage? {
+            let maxAngle = 0.045 * strength * amplitude
+            var accumulated: CIImage?
+            for offset in offsets {
+                let angle = CGFloat(offset * maxAngle)
+                let transform = CGAffineTransform(translationX: center.x, y: center.y)
+                    .rotated(by: angle)
+                    .translatedBy(x: -center.x, y: -center.y)
+                let rotated = clamped.transformed(by: transform).cropped(to: extent)
+                let weighted = scaled(rotated, by: weight)
+                if let acc = accumulated {
+                    let add = CIFilter.additionCompositing()
+                    add.inputImage = weighted
+                    add.backgroundImage = acc
+                    accumulated = add.outputImage
+                } else {
+                    accumulated = weighted
+                }
             }
+            guard let swirled = accumulated else { return nil }
+            let sigma = (1.2 + 2.5 * strength) * (0.4 + 0.6 * amplitude)
+            return swirled.clampedToExtent()
+                .applyingGaussianBlur(sigma: sigma)
+                .cropped(to: extent)
         }
-        guard var swirled = accumulated else { return img }
-        swirled = swirled.clampedToExtent()
-            .applyingGaussianBlur(sigma: 1.2 + 2.5 * strength)
-            .cropped(to: extent)
 
-        let mask = customMask ?? radialMask(extent: extent, center: center,
-                                            inner: dim * 0.20, outer: dim * 0.60)
+        if let customMask {
+            // Tourbillon gradué : chaque bande de distance reçoit une
+            // amplitude croissante, le sujet reste intact.
+            var out = img
+            for band in depthBands(customMask) {
+                guard let layer = swirledLayer(amplitude: band.factor) else { continue }
+                let blend = CIFilter.blendWithMask()
+                blend.inputImage = layer
+                blend.backgroundImage = out
+                blend.maskImage = band.weight
+                out = blend.outputImage ?? out
+            }
+            return out
+        }
+
+        guard let swirled = swirledLayer(amplitude: 1.0) else { return img }
+        let mask = radialMask(extent: extent, center: center,
+                              inner: dim * 0.20, outer: dim * 0.60)
         let blend = CIFilter.blendWithMask()
         blend.inputImage = swirled
         blend.backgroundImage = img
@@ -207,21 +229,11 @@ final class LensEngine {
             return screen.outputImage ?? img
         }
 
-        // Trois couches de bulles réparties en bandes de profondeur
-        // mutuellement exclusives : proches du plan de netteté → petites,
-        // lointaines → larges. Les rampes se recouvrent pour des fondus doux.
-        let rampNear = ramp(customMask, from: 0.25, to: 0.45)
-        let rampMid = ramp(customMask, from: 0.55, to: 0.70)
-        let rampFar = ramp(customMask, from: 0.80, to: 0.92)
-        let bands: [(radiusFactor: Float, weight: CIImage)] = [
-            (0.6, multiplied(rampNear, inverted(rampMid))),
-            (1.0, multiplied(rampMid, inverted(rampFar))),
-            (1.5, rampFar),
-        ]
-
+        // Trois couches de bulles réparties sur les bandes de distance
+        // partagées : proches du plan de netteté → petites, lointaines → larges.
         var out = img
-        for band in bands {
-            guard var rings = ringLayer(discRadius: max(3, baseRadius * band.radiusFactor))
+        for band in depthBands(customMask) {
+            guard var rings = ringLayer(discRadius: max(3, baseRadius * Float(band.factor)))
             else { continue }
             rings = multiplied(rings, band.weight).cropped(to: extent)
             let screen = CIFilter.screenBlendMode()
@@ -324,6 +336,21 @@ final class LensEngine {
     }
 
     // MARK: - Utilitaires
+
+    /// Bandes de distance mutuellement exclusives découpées dans le masque
+    /// de profondeur : (facteur d'intensité, poids). Proche du plan de
+    /// netteté → effet léger, lointain → effet fort. Les rampes se
+    /// recouvrent pour des fondus doux entre bandes.
+    private func depthBands(_ mask: CIImage) -> [(factor: Double, weight: CIImage)] {
+        let rampNear = ramp(mask, from: 0.25, to: 0.45)
+        let rampMid = ramp(mask, from: 0.55, to: 0.70)
+        let rampFar = ramp(mask, from: 0.80, to: 0.92)
+        return [
+            (0.6, multiplied(rampNear, inverted(rampMid))),
+            (1.0, multiplied(rampMid, inverted(rampFar))),
+            (1.5, rampFar),
+        ]
+    }
 
     /// Rampe linéaire bornée : 0 sous `lo`, 1 au-dessus de `hi`.
     /// Sert à découper le masque de profondeur en bandes de distance.
