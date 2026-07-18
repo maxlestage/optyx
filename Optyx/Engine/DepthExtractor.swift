@@ -32,10 +32,23 @@ enum DepthExtractor {
         return nil
     }
 
+    /// Plage de valeurs d'une carte de profondeur/disparité.
+    struct DepthRange {
+        let min: Float
+        let max: Float
+    }
+
     /// Normalise une carte de profondeur/disparité en masque 0…1 où
     /// l'arrière-plan (loin) tend vers le blanc.
-    /// Utilisé aussi par la caméra pour la profondeur en direct.
     static func normalizedFarMask(_ map: CIImage, farIsSmall: Bool) -> CIImage? {
+        guard let range = range(of: map) else { return nil }
+        return farMask(map, range: range, farIsSmall: farIsSmall)
+    }
+
+    /// Mesure le min/max de la carte — seule étape avec un aller-retour
+    /// GPU→CPU. La caméra la met en cache et ne la rafraîchit que
+    /// périodiquement, la plage d'une scène évoluant lentement.
+    static func range(of map: CIImage) -> DepthRange? {
         guard !map.extent.isEmpty, !map.extent.isInfinite else { return nil }
 
         let minMax = CIFilter(name: "CIAreaMinMax", parameters: [
@@ -55,9 +68,14 @@ enum DepthExtractor {
         let minValue = pixels[0]
         let maxValue = pixels[4]
         guard maxValue - minValue > 0.0001 else { return nil }
+        return DepthRange(min: minValue, max: maxValue)
+    }
 
-        let scale = CGFloat(1.0 / (maxValue - minValue))
-        let bias = CGFloat(-minValue) * scale
+    /// Construit le masque à partir d'une plage déjà mesurée —
+    /// pure chaîne de filtres, sans lecture CPU.
+    static func farMask(_ map: CIImage, range: DepthRange, farIsSmall: Bool) -> CIImage {
+        let scale = CGFloat(1.0 / (range.max - range.min))
+        let bias = CGFloat(-range.min) * scale
         var mask = map.applyingFilter("CIColorMatrix", parameters: [
             "inputRVector": CIVector(x: scale, y: 0, z: 0, w: 0),
             "inputGVector": CIVector(x: scale, y: 0, z: 0, w: 0),

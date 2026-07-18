@@ -55,9 +55,21 @@ final class CameraController: NSObject, ObservableObject {
     /// Plus grand côté des images de prévisualisation (compromis fluidité/qualité).
     private let previewMaxDimension: CGFloat = 900
 
+    /// Cache de la plage de profondeur du flux direct : la mesure min/max
+    /// (aller-retour GPU→CPU) n'est refaite qu'une image sur
+    /// `depthRangeRefreshInterval`, la plage d'une scène évoluant lentement.
+    /// Accédé uniquement depuis `videoQueue`.
+    private var cachedDepthRange: DepthExtractor.DepthRange?
+    private var depthFrameCounter = 0
+    private let depthRangeRefreshInterval = 5
+
     // MARK: - Cycle de vie
 
     func start() {
+        videoQueue.async { [weak self] in
+            self?.cachedDepthRange = nil
+            self?.depthFrameCounter = 0
+        }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             configureAndRun()
@@ -197,11 +209,30 @@ final class CameraController: NSObject, ObservableObject {
 
     /// Convertit une carte de profondeur AVFoundation en masque
     /// d'arrière-plan (blanc = loin) orienté comme la prévisualisation.
+    /// Version complète (mesure de plage incluse), pour la capture photo.
     private static func backgroundMask(from depthData: AVDepthData) -> CIImage? {
         let disparity = depthData.converting(
             toDepthDataType: kCVPixelFormatType_DisparityFloat32)
         let map = CIImage(cvPixelBuffer: disparity.depthDataMap).oriented(.right)
         return DepthExtractor.normalizedFarMask(map, farIsSmall: true)
+    }
+
+    /// Version pour le flux direct : réutilise la plage min/max mise en
+    /// cache et ne la rafraîchit que périodiquement. Appelée sur `videoQueue`.
+    private func liveBackgroundMask(from depthData: AVDepthData) -> CIImage? {
+        let disparity = depthData.converting(
+            toDepthDataType: kCVPixelFormatType_DisparityFloat32)
+        let map = CIImage(cvPixelBuffer: disparity.depthDataMap).oriented(.right)
+
+        depthFrameCounter += 1
+        if cachedDepthRange == nil
+            || depthFrameCounter % depthRangeRefreshInterval == 1 {
+            if let fresh = DepthExtractor.range(of: map) {
+                cachedDepthRange = fresh
+            }
+        }
+        guard let range = cachedDepthRange else { return nil }
+        return DepthExtractor.farMask(map, range: range, farIsSmall: true)
     }
 
     // MARK: - Capture photo
@@ -254,7 +285,7 @@ extension CameraController: AVCaptureDataOutputSynchronizerDelegate {
            let syncedDepth = synchronizedDataCollection
                .synchronizedData(for: depthOutput) as? AVCaptureSynchronizedDepthData,
            !syncedDepth.depthDataWasDropped {
-            depthMask = Self.backgroundMask(from: syncedDepth.depthData)
+            depthMask = liveBackgroundMask(from: syncedDepth.depthData)
         }
 
         processVideoFrame(syncedVideo.sampleBuffer, depthMask: depthMask)
