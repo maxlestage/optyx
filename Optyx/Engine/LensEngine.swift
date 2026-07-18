@@ -232,8 +232,8 @@ final class LensEngine {
             return screen.outputImage ?? img
         }
 
-        // Trois couches de bulles réparties sur les bandes de distance
-        // partagées : proches du plan de netteté → petites, lointaines → larges.
+        // Couches de bulles réparties sur les bandes de distance partagées :
+        // proches du plan de netteté → petites, lointaines → larges.
         var out = img
         for band in depthBands(customMask) {
             guard var rings = ringLayer(discRadius: max(3, baseRadius * Float(band.factor)))
