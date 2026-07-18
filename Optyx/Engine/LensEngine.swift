@@ -1,0 +1,343 @@
+import CoreImage
+import CoreImage.CIFilterBuiltins
+import UIKit
+
+/// Moteur de rendu : applique le profil optique d'un objectif vintage
+/// à une image via une chaîne de filtres Core Image.
+///
+/// Chaîne : tonalité → température → tourbillon → douceur des bords
+/// → bulles de savon → halo → aberration chromatique → vignettage → grain.
+final class LensEngine {
+
+    static let shared = LensEngine()
+
+    let context: CIContext
+
+    private init() {
+        context = CIContext(options: [.cacheIntermediates: false])
+    }
+
+    // MARK: - Rendu principal
+
+    /// - Parameters:
+    ///   - input: image source.
+    ///   - lens: profil de l'objectif simulé.
+    ///   - intensity: intensité globale de la simulation (0…1).
+    func render(_ input: CIImage, lens: LensProfile, intensity: Double) -> CIImage {
+        let extent = input.extent
+        guard !extent.isEmpty, intensity > 0 else { return input }
+
+        let k = intensity
+        let dim = min(extent.width, extent.height)
+        let center = CGPoint(x: extent.midX, y: extent.midY)
+        var img = input
+
+        img = applyTone(img, lens: lens, k: k)
+        img = applyWarmth(img, lens: lens, k: k)
+        img = applySwirl(img, lens: lens, k: k, extent: extent, center: center, dim: dim)
+        img = applyEdgeSoftness(img, lens: lens, k: k, extent: extent, center: center, dim: dim)
+        img = applyBubbleBokeh(img, lens: lens, k: k, extent: extent, dim: dim)
+        img = applyGlow(img, lens: lens, k: k, dim: dim, extent: extent)
+        img = applyChromaticAberration(img, lens: lens, k: k, extent: extent, center: center)
+        img = applyVignette(img, lens: lens, k: k, center: center, dim: dim)
+        img = applyGrain(img, lens: lens, k: k, extent: extent)
+
+        return img.cropped(to: extent)
+    }
+
+    /// Rend l'image en UIImage (pour affichage ou sauvegarde).
+    func renderUIImage(_ input: CIImage, lens: LensProfile, intensity: Double) -> UIImage? {
+        let output = render(input, lens: lens, intensity: intensity)
+        guard let cg = context.createCGImage(output, from: output.extent) else { return nil }
+        return UIImage(cgImage: cg)
+    }
+
+    // MARK: - Étapes de la chaîne
+
+    /// Contraste, saturation et noirs voilés.
+    private func applyTone(_ img: CIImage, lens: LensProfile, k: Double) -> CIImage {
+        var out = img
+
+        let controls = CIFilter.colorControls()
+        controls.inputImage = out
+        controls.contrast = Float(1.0 - 0.22 * lens.fade * k)
+        controls.saturation = Float(1.0 + (lens.saturation - 1.0) * k)
+        controls.brightness = 0
+        out = controls.outputImage ?? out
+
+        if lens.fade > 0.01 {
+            let lift = CGFloat(0.07 * lens.fade * k)
+            let poly = CIFilter.colorPolynomial()
+            poly.inputImage = out
+            let coeff = CIVector(x: lift, y: 1 - lift, z: 0, w: 0)
+            poly.redCoefficients = coeff
+            poly.greenCoefficients = coeff
+            poly.blueCoefficients = coeff
+            poly.alphaCoefficients = CIVector(x: 0, y: 1, z: 0, w: 0)
+            out = poly.outputImage ?? out
+        }
+        return out
+    }
+
+    /// Dérive chaude (verre au thorium, traitements anciens).
+    private func applyWarmth(_ img: CIImage, lens: LensProfile, k: Double) -> CIImage {
+        guard lens.warmth > 0.01 else { return img }
+        let filter = CIFilter.temperatureAndTint()
+        filter.inputImage = img
+        filter.neutral = CIVector(x: 6500, y: 0)
+        filter.targetNeutral = CIVector(x: 6500 + 2200 * lens.warmth * k, y: 4 * lens.warmth * k)
+        return filter.outputImage ?? img
+    }
+
+    /// Bokeh tourbillonnant : moyenne de copies légèrement pivotées autour
+    /// du centre (flou tangentiel croissant avec le rayon), limitée aux bords
+    /// par un masque radial pour préserver la netteté du sujet.
+    private func applySwirl(_ img: CIImage, lens: LensProfile, k: Double,
+                            extent: CGRect, center: CGPoint, dim: CGFloat) -> CIImage {
+        let strength = lens.swirl * k
+        guard strength > 0.02 else { return img }
+
+        let clamped = img.clampedToExtent()
+        let maxAngle = 0.045 * strength
+        let offsets: [Double] = [-1.0, -0.6, -0.2, 0.2, 0.6, 1.0]
+        let weight = CGFloat(1.0 / Double(offsets.count))
+
+        var accumulated: CIImage?
+        for offset in offsets {
+            let angle = CGFloat(offset * maxAngle)
+            let transform = CGAffineTransform(translationX: center.x, y: center.y)
+                .rotated(by: angle)
+                .translatedBy(x: -center.x, y: -center.y)
+            let rotated = clamped.transformed(by: transform).cropped(to: extent)
+            let weighted = scaled(rotated, by: weight)
+            if let acc = accumulated {
+                let add = CIFilter.additionCompositing()
+                add.inputImage = weighted
+                add.backgroundImage = acc
+                accumulated = add.outputImage
+            } else {
+                accumulated = weighted
+            }
+        }
+        guard var swirled = accumulated else { return img }
+        swirled = swirled.clampedToExtent()
+            .applyingGaussianBlur(sigma: 1.2 + 2.5 * strength)
+            .cropped(to: extent)
+
+        let mask = radialMask(extent: extent, center: center,
+                              inner: dim * 0.20, outer: dim * 0.60)
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = swirled
+        blend.backgroundImage = img
+        blend.maskImage = mask
+        return blend.outputImage ?? img
+    }
+
+    /// Perte de piqué progressive vers les bords du champ.
+    private func applyEdgeSoftness(_ img: CIImage, lens: LensProfile, k: Double,
+                                   extent: CGRect, center: CGPoint, dim: CGFloat) -> CIImage {
+        let strength = lens.softness * k
+        guard strength > 0.02 else { return img }
+        let filter = CIFilter.maskedVariableBlur()
+        filter.inputImage = img.clampedToExtent()
+        filter.mask = radialMask(extent: extent, center: center,
+                                 inner: dim * 0.28, outer: dim * 0.72)
+        filter.radius = Float(dim * 0.012 * strength)
+        return filter.outputImage?.cropped(to: extent) ?? img
+    }
+
+    /// Bokeh « bulles de savon » : les hautes lumières sont dilatées en
+    /// disques dont on ne garde que le contour, incrusté en mode écran.
+    private func applyBubbleBokeh(_ img: CIImage, lens: LensProfile, k: Double,
+                                  extent: CGRect, dim: CGFloat) -> CIImage {
+        let strength = lens.bubble * k
+        guard strength > 0.02 else { return img }
+
+        let mono = CIFilter.colorControls()
+        mono.inputImage = img
+        mono.saturation = 0
+        mono.contrast = 1
+        guard let gray = mono.outputImage else { return img }
+
+        let threshold = CIFilter.colorThreshold()
+        threshold.inputImage = gray
+        threshold.threshold = 0.80
+        guard let highlights = threshold.outputImage else { return img }
+
+        let discRadius = Float(max(4, dim * 0.014))
+        let dilate = CIFilter.morphologyMaximum()
+        dilate.inputImage = highlights.clampedToExtent()
+        dilate.radius = discRadius
+        guard let discs = dilate.outputImage else { return img }
+
+        let ring = CIFilter.morphologyGradient()
+        ring.inputImage = discs
+        ring.radius = max(1.5, discRadius * 0.18)
+        guard var rings = ring.outputImage else { return img }
+
+        rings = rings.applyingGaussianBlur(sigma: 1.0).cropped(to: extent)
+        rings = scaled(rings, by: CGFloat(0.75 * strength),
+                       tint: (r: 1.0, g: 0.96, b: 0.88))
+
+        let screen = CIFilter.screenBlendMode()
+        screen.inputImage = rings
+        screen.backgroundImage = img
+        return screen.outputImage ?? img
+    }
+
+    /// Halo lumineux / voile onirique autour des hautes lumières.
+    private func applyGlow(_ img: CIImage, lens: LensProfile, k: Double,
+                           dim: CGFloat, extent: CGRect) -> CIImage {
+        let strength = lens.glow * k
+        guard strength > 0.02 else { return img }
+        let bloom = CIFilter.bloom()
+        bloom.inputImage = img.clampedToExtent()
+        bloom.intensity = Float(0.9 * strength)
+        bloom.radius = Float(dim * 0.02 * (0.5 + strength))
+        return bloom.outputImage?.cropped(to: extent) ?? img
+    }
+
+    /// Aberration chromatique latérale : les canaux rouge et bleu sont
+    /// très légèrement dilatés/contractés autour du centre.
+    private func applyChromaticAberration(_ img: CIImage, lens: LensProfile, k: Double,
+                                          extent: CGRect, center: CGPoint) -> CIImage {
+        let strength = lens.chroma * k
+        guard strength > 0.02 else { return img }
+        let delta = 0.0035 * strength
+
+        let clamped = img.clampedToExtent()
+        let red = channel(clamped, r: 1, g: 0, b: 0, keepAlpha: false)
+            .transformed(by: scaleAround(center, factor: 1 + delta))
+            .cropped(to: extent)
+        let green = channel(clamped, r: 0, g: 1, b: 0, keepAlpha: true)
+            .cropped(to: extent)
+        let blue = channel(clamped, r: 0, g: 0, b: 1, keepAlpha: false)
+            .transformed(by: scaleAround(center, factor: 1 - delta))
+            .cropped(to: extent)
+
+        let addRG = CIFilter.additionCompositing()
+        addRG.inputImage = red
+        addRG.backgroundImage = green
+        guard let rg = addRG.outputImage else { return img }
+
+        let addRGB = CIFilter.additionCompositing()
+        addRGB.inputImage = blue
+        addRGB.backgroundImage = rg
+        guard let rgb = addRGB.outputImage else { return img }
+
+        let clamp = CIFilter.colorClamp()
+        clamp.inputImage = rgb
+        clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
+        clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
+        return clamp.outputImage ?? img
+    }
+
+    private func applyVignette(_ img: CIImage, lens: LensProfile, k: Double,
+                               center: CGPoint, dim: CGFloat) -> CIImage {
+        let strength = lens.vignette * k
+        guard strength > 0.02 else { return img }
+        let filter = CIFilter.vignetteEffect()
+        filter.inputImage = img
+        filter.center = center
+        filter.radius = Float(dim * 0.75)
+        filter.intensity = Float(1.1 * strength)
+        filter.falloff = 0.5
+        return filter.outputImage ?? img
+    }
+
+    /// Grain argentique en incrustation lumière douce.
+    private func applyGrain(_ img: CIImage, lens: LensProfile, k: Double,
+                            extent: CGRect) -> CIImage {
+        let strength = lens.grain * k
+        guard strength > 0.02 else { return img }
+
+        guard let noise = CIFilter.randomGenerator().outputImage else { return img }
+        let mono = CIFilter.colorControls()
+        mono.inputImage = noise
+        mono.saturation = 0
+        guard let gray = mono.outputImage else { return img }
+
+        // Recentre le bruit autour du gris moyen avec une amplitude réduite :
+        // out = 0.5 + (bruit − 0.5) × amplitude
+        let amp = CGFloat(0.35 * strength)
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = gray
+        matrix.rVector = CIVector(x: amp, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: amp, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: amp, w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        let bias = 0.5 - amp / 2
+        matrix.biasVector = CIVector(x: bias, y: bias, z: bias, w: 0)
+        guard let grain = matrix.outputImage?.cropped(to: extent) else { return img }
+
+        let blend = CIFilter.softLightBlendMode()
+        blend.inputImage = grain
+        blend.backgroundImage = img
+        return blend.outputImage ?? img
+    }
+
+    // MARK: - Utilitaires
+
+    /// Masque radial : noir au centre (image nette), blanc vers les bords.
+    private func radialMask(extent: CGRect, center: CGPoint,
+                            inner: CGFloat, outer: CGFloat) -> CIImage {
+        let gradient = CIFilter.radialGradient()
+        gradient.center = center
+        gradient.radius0 = Float(inner)
+        gradient.radius1 = Float(outer)
+        gradient.color0 = CIColor.black
+        gradient.color1 = CIColor.white
+        return (gradient.outputImage ?? CIImage.empty()).cropped(to: extent)
+    }
+
+    /// Extrait un canal couleur ; `keepAlpha` conserve l'alpha sur ce canal
+    /// pour que la somme des trois canaux garde un alpha de 1.
+    private func channel(_ img: CIImage, r: CGFloat, g: CGFloat, b: CGFloat,
+                         keepAlpha: Bool) -> CIImage {
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = img
+        matrix.rVector = CIVector(x: r, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: g, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: b, w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: keepAlpha ? 1 : 0)
+        matrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        return matrix.outputImage ?? img
+    }
+
+    /// Multiplie RVB (et alpha) par un facteur, avec teinte optionnelle.
+    private func scaled(_ img: CIImage, by factor: CGFloat,
+                        tint: (r: CGFloat, g: CGFloat, b: CGFloat) = (1, 1, 1)) -> CIImage {
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = img
+        matrix.rVector = CIVector(x: factor * tint.r, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: factor * tint.g, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: factor * tint.b, w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: factor)
+        matrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        return matrix.outputImage ?? img
+    }
+
+    private func scaleAround(_ center: CGPoint, factor: CGFloat) -> CGAffineTransform {
+        CGAffineTransform(translationX: center.x, y: center.y)
+            .scaledBy(x: factor, y: factor)
+            .translatedBy(x: -center.x, y: -center.y)
+    }
+}
+
+// MARK: - Préparation des images
+
+extension UIImage {
+    /// Redessine l'image avec l'orientation appliquée, en la limitant
+    /// à `maxDimension` pixels sur son plus grand côté.
+    func normalized(maxDimension: CGFloat) -> UIImage {
+        let largest = max(size.width, size.height)
+        let ratio = min(1, maxDimension / max(largest, 1))
+        let target = CGSize(width: (size.width * ratio).rounded(),
+                            height: (size.height * ratio).rounded())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            draw(in: CGRect(origin: .zero, size: target))
+        }
+    }
+}
