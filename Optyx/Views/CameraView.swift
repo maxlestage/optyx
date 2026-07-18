@@ -5,6 +5,8 @@ struct CameraView: View {
     @StateObject private var camera = CameraController()
     @State private var lens: LensProfile = .catalog[1]
     @State private var intensity: Double = 1.0
+    /// Zoom au début du pincement en cours.
+    @State private var pinchBaseZoom: CGFloat = 1
 
     var body: some View {
         ZStack {
@@ -32,18 +34,21 @@ struct CameraView: View {
             }
 
             VStack {
-                HStack(spacing: 8) {
-                    if camera.isRecording {
-                        recordingChip
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        if camera.isRecording { recordingChip }
+                        flipButton
+                        if camera.zoomFactor > 1.05 { zoomChip }
+                        aeafToggle
+                        if camera.mode == .video { fourKToggle }
+                        if camera.mode == .video { hdrToggle }
+                        if camera.mode == .video { cineToggle }
+                        if camera.mode == .video { letterboxToggle }
+                        if camera.depthAvailable { depthToggle }
+                        if camera.rawSupported && camera.mode == .photo { rawToggle }
                     }
-                    Spacer()
-                    if camera.mode == .video { fourKToggle }
-                    if camera.mode == .video { cineToggle }
-                    if camera.mode == .video { letterboxToggle }
-                    if camera.depthAvailable { depthToggle }
-                    if camera.rawSupported && camera.mode == .photo { rawToggle }
+                    .padding(.horizontal)
                 }
-                .padding(.horizontal)
                 .padding(.top, 4)
                 Spacer()
                 controls
@@ -56,6 +61,15 @@ struct CameraView: View {
                     .transition(.opacity)
             }
         }
+        .simultaneousGesture(
+            MagnificationGesture()
+                .onChanged { value in
+                    camera.setZoom(pinchBaseZoom * value)
+                }
+                .onEnded { _ in
+                    pinchBaseZoom = camera.zoomFactor
+                }
+        )
         .animation(.easeInOut(duration: 0.25), value: camera.lastCaptureSaved)
         .onAppear {
             camera.lens = lens
@@ -82,6 +96,79 @@ struct CameraView: View {
                                    : Color.white.opacity(0.15))
                 )
                 .foregroundStyle(camera.cineMode ? .black : .white)
+        }
+        .buttonStyle(.plain)
+        .disabled(camera.isRecording)
+    }
+
+    /// Bascule caméra arrière ↔ frontale.
+    private var flipButton: some View {
+        Button {
+            camera.switchCamera()
+            pinchBaseZoom = 1
+        } label: {
+            Image(systemName: "arrow.triangle.2.circlepath.camera")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(Color.white.opacity(0.15)))
+                .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+        .disabled(camera.isRecording)
+    }
+
+    /// Facteur de zoom courant ; un tap le remet à 1×.
+    private var zoomChip: some View {
+        Button {
+            camera.setZoom(1)
+            pinchBaseZoom = 1
+        } label: {
+            Text(String(format: "%.1f×", camera.zoomFactor))
+                .font(.caption.monospacedDigit().weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(Color.white.opacity(0.15)))
+                .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Verrouillage exposition + mise au point.
+    private var aeafToggle: some View {
+        Button {
+            camera.toggleExposureFocusLock()
+        } label: {
+            Label("AE/AF", systemImage: camera.exposureFocusLocked
+                  ? "lock.fill" : "lock.open")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(camera.exposureFocusLocked
+                                   ? Color.orange.opacity(0.9)
+                                   : Color.white.opacity(0.15))
+                )
+                .foregroundStyle(camera.exposureFocusLocked ? .black : .white)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// HDR : capture et encodage 10 bits HLG BT.2020.
+    private var hdrToggle: some View {
+        Button {
+            camera.toggleHDR()
+        } label: {
+            Text("HDR")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(camera.hdrEnabled
+                                   ? Color.orange.opacity(0.9)
+                                   : Color.white.opacity(0.15))
+                )
+                .foregroundStyle(camera.hdrEnabled ? .black : .white)
         }
         .buttonStyle(.plain)
         .disabled(camera.isRecording)

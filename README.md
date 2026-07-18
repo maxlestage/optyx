@@ -38,6 +38,15 @@ sur vos photos existantes.
   visibles en direct dans le viseur. Pastille **4K** : enregistrement à
   3840 px de plus grand côté avec **stabilisation cinématique**, pour tous
   les profils d'objectifs (1440 px et stabilisation désactivée sinon).
+  Pastille **HDR** : capture 10 bits et encodage HEVC Main10 en HLG
+  BT.2020 (lu comme HDR par Photos ; le Dolby Vision proprement dit est
+  réservé au pipeline de capture natif d'Apple). Audio AAC **stéréo
+  48 kHz 192 kbit/s** quand le matériel le permet, débit vidéo explicite
+  (~0,15 bit/pixel/s, majoré en HDR).
+- **Contrôles de prise de vue** — bascule caméra arrière ↔ frontale
+  (TrueDepth : la profondeur reste disponible en selfie), **zoom par
+  pincement** (pastille tap-pour-revenir-à-1×), verrouillage
+  **AE/AF** (exposition + mise au point).
 - **Profondeur en direct** — sur les iPhone à LiDAR ou double capteur, la
   carte de profondeur est capturée en continu (`AVCaptureDepthDataOutput`
   synchronisée avec la vidéo) : dans le viseur comme sur la photo capturée,
