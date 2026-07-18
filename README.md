@@ -26,6 +26,11 @@ sur vos photos existantes.
   trame dans un pixel buffer, la boucle d'affichage ne fait que recopier la
   texture — aucun aller-retour CPU par image. Le viseur rend en pleine
   qualité, identique à la photo capturée.
+- **Vidéo** — mode vidéo avec la simulation appliquée en direct : les trames
+  déjà rendues pour le viseur alimentent un `AVAssetWriter` (HEVC .mov,
+  1440 px, audio micro en AAC) sans aucun rendu supplémentaire. Chronomètre
+  à l'écran, fichier enregistré dans Photos. Sans accès micro, la vidéo est
+  muette.
 - **Profondeur en direct** — sur les iPhone à LiDAR ou double capteur, la
   carte de profondeur est capturée en continu (`AVCaptureDepthDataOutput`
   synchronisée avec la vidéo) : dans le viseur comme sur la photo capturée,

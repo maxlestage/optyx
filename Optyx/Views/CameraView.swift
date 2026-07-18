@@ -32,15 +32,16 @@ struct CameraView: View {
             }
 
             VStack {
-                if camera.rawSupported || camera.depthAvailable {
-                    HStack(spacing: 8) {
-                        Spacer()
-                        if camera.depthAvailable { depthToggle }
-                        if camera.rawSupported { rawToggle }
+                HStack(spacing: 8) {
+                    if camera.isRecording {
+                        recordingChip
                     }
-                    .padding(.horizontal)
-                    .padding(.top, 4)
+                    Spacer()
+                    if camera.depthAvailable { depthToggle }
+                    if camera.rawSupported && camera.mode == .photo { rawToggle }
                 }
+                .padding(.horizontal)
+                .padding(.top, 4)
                 Spacer()
                 controls
             }
@@ -61,6 +62,20 @@ struct CameraView: View {
         .onDisappear { camera.stop() }
         .onChange(of: lens) { _, newValue in camera.lens = newValue }
         .onChange(of: intensity) { _, newValue in camera.intensity = newValue }
+    }
+
+    /// Chronomètre d'enregistrement.
+    private var recordingChip: some View {
+        Label(timeString(camera.recordingSeconds), systemImage: "record.circle")
+            .font(.caption.monospacedDigit().weight(.bold))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Color.red.opacity(0.85)))
+            .foregroundStyle(.white)
+    }
+
+    private func timeString(_ seconds: Int) -> String {
+        String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 
     /// Active le bokeh guidé par la profondeur en direct (LiDAR / double
@@ -119,18 +134,35 @@ struct CameraView: View {
             }
             .padding(.horizontal)
 
-            if camera.rawEnabled {
+            if camera.rawEnabled && camera.mode == .photo {
                 Text("DNG original + rendu vintage enregistrés dans Photos")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
+            HStack(spacing: 24) {
+                modeButton("Photo", .photo)
+                modeButton("Vidéo", .video)
+            }
+
             Button {
-                camera.capturePhoto()
+                if camera.mode == .photo {
+                    camera.capturePhoto()
+                } else {
+                    camera.toggleRecording()
+                }
             } label: {
                 ZStack {
                     Circle().stroke(.white, lineWidth: 4).frame(width: 72, height: 72)
-                    Circle().fill(.white).frame(width: 58, height: 58)
+                    if camera.mode == .photo {
+                        Circle().fill(.white).frame(width: 58, height: 58)
+                    } else if camera.isRecording {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(.red)
+                            .frame(width: 30, height: 30)
+                    } else {
+                        Circle().fill(.red).frame(width: 58, height: 58)
+                    }
                 }
             }
             .buttonStyle(.plain)
@@ -139,6 +171,18 @@ struct CameraView: View {
         }
         .padding(.vertical, 12)
         .background(.black.opacity(0.35))
+    }
+
+    private func modeButton(_ label: String, _ mode: CameraController.CaptureMode) -> some View {
+        Button {
+            camera.mode = mode
+        } label: {
+            Text(label)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(camera.mode == mode ? Color.orange : Color.secondary)
+        }
+        .buttonStyle(.plain)
+        .disabled(camera.isRecording)
     }
 
     private func permissionMessage(_ title: String, _ message: String) -> some View {
