@@ -21,12 +21,7 @@ sur vos photos existantes.
 ## Fonctionnalités
 
 - **Caméra** — viseur temps réel avec le rendu de l'objectif appliqué au flux
-  vidéo, capture photo plein format enregistrée dans Photos. Affichage
-  **Metal** (`MTKView`) : la chaîne de filtres est exécutée une seule fois par
-  trame dans un pixel buffer, la boucle d'affichage ne fait que recopier la
-  texture — aucun aller-retour CPU par image. Le viseur utilise un mode
-  aperçu allégé (4 rotations de tourbillon au lieu de 6, 2 bandes de
-  profondeur au lieu de 3) ; la capture garde la qualité maximale.
+  vidéo, capture photo plein format enregistrée dans Photos.
 - **Profondeur en direct** — sur les iPhone à LiDAR ou double capteur, la
   carte de profondeur est capturée en continu (`AVCaptureDepthDataOutput`
   synchronisée avec la vidéo) : dans le viseur comme sur la photo capturée,

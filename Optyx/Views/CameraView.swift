@@ -12,9 +12,12 @@ struct CameraView: View {
 
             switch camera.status {
             case .running, .idle:
-                MetalPreviewView(renderer: camera.previewRenderer)
-                    .ignoresSafeArea(edges: .top)
-                if !camera.hasFrame {
+                if let frame = camera.previewFrame {
+                    Image(uiImage: frame)
+                        .resizable()
+                        .scaledToFit()
+                        .ignoresSafeArea(edges: .top)
+                } else {
                     ProgressView("Démarrage de la caméra…")
                         .tint(.white)
                         .foregroundStyle(.white)
