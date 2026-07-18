@@ -35,6 +35,14 @@ struct CameraView: View {
             }
 
             VStack {
+                if camera.rawSupported {
+                    HStack {
+                        Spacer()
+                        rawToggle
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 4)
+                }
                 Spacer()
                 controls
             }
@@ -57,6 +65,26 @@ struct CameraView: View {
         .onChange(of: intensity) { _, newValue in camera.intensity = newValue }
     }
 
+    /// Active la capture DNG : le fichier RAW original (ProRAW si disponible)
+    /// est joint à la photo vintage enregistrée dans Photos.
+    private var rawToggle: some View {
+        Button {
+            camera.rawEnabled.toggle()
+        } label: {
+            Text(camera.isProRAW ? "ProRAW" : "RAW")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(camera.rawEnabled
+                                   ? Color.orange.opacity(0.9)
+                                   : Color.white.opacity(0.15))
+                )
+                .foregroundStyle(camera.rawEnabled ? .black : .white)
+        }
+        .buttonStyle(.plain)
+    }
+
     private var controls: some View {
         VStack(spacing: 12) {
             LensChipBar(selected: $lens)
@@ -72,6 +100,12 @@ struct CameraView: View {
                     .frame(width: 44, alignment: .trailing)
             }
             .padding(.horizontal)
+
+            if camera.rawEnabled {
+                Text("DNG original + rendu vintage enregistrés dans Photos")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
 
             Button {
                 camera.capturePhoto()

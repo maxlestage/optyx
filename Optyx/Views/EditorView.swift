@@ -1,3 +1,4 @@
+import CoreImage
 import SwiftUI
 import PhotosUI
 
@@ -131,11 +132,24 @@ struct EditorView: View {
         guard let item else { return }
         Task {
             guard let data = try? await item.loadTransferable(type: Data.self),
-                  let image = UIImage(data: data) else { return }
+                  let image = await decode(data) else { return }
             fullResolution = image.normalized(maxDimension: 3200)
             original = image.normalized(maxDimension: 1200)
             processed = nil
         }
+    }
+
+    /// Décode l'image importée ; les fichiers RAW (Apple ProRAW / DNG) que
+    /// UIImage ne sait pas ouvrir sont développés via CIRAWFilter.
+    private func decode(_ data: Data) async -> UIImage? {
+        if let image = UIImage(data: data) { return image }
+        return await Task.detached(priority: .userInitiated) {
+            guard let rawFilter = CIRAWFilter(imageData: data, identifierHint: nil),
+                  let output = rawFilter.outputImage,
+                  let cgImage = LensEngine.shared.context
+                      .createCGImage(output, from: output.extent) else { return nil }
+            return UIImage(cgImage: cgImage)
+        }.value
     }
 
     private func processPreview() async {

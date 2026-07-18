@@ -1,9 +1,11 @@
 import AVFoundation
 import CoreImage
+import Photos
 import UIKit
 
 /// Gère la session de capture : flux vidéo filtré en temps réel
-/// par le moteur de rendu, et prise de photo plein format.
+/// par le moteur de rendu, et prise de photo plein format —
+/// avec capture Apple ProRAW / RAW (DNG) quand l'appareil le permet.
 final class CameraController: NSObject, ObservableObject {
 
     enum Status {
@@ -17,6 +19,13 @@ final class CameraController: NSObject, ObservableObject {
     @Published var status: Status = .idle
     @Published var lastCaptureSaved = false
 
+    /// La capture RAW est-elle disponible sur cet appareil ?
+    @Published var rawSupported = false
+    /// Le format disponible est-il Apple ProRAW (sinon RAW Bayer classique) ?
+    @Published var isProRAW = false
+    /// Capture RAW activée par l'utilisateur.
+    @Published var rawEnabled = false
+
     /// Profil et intensité appliqués au flux (modifiables depuis l'UI).
     var lens: LensProfile = .catalog[1]
     var intensity: Double = 1.0
@@ -28,6 +37,11 @@ final class CameraController: NSObject, ObservableObject {
     private let photoOutput = AVCapturePhotoOutput()
     private var isConfigured = false
     private var isProcessingFrame = false
+
+    /// Données accumulées pendant une capture (le RAW et le développé
+    /// arrivent dans deux callbacks séparés).
+    private var pendingRawData: Data?
+    private var pendingProcessedData: Data?
 
     /// Plus grand côté des images de prévisualisation (compromis fluidité/qualité).
     private let previewMaxDimension: CGFloat = 900
@@ -93,6 +107,18 @@ final class CameraController: NSObject, ObservableObject {
         guard session.canAddOutput(photoOutput) else { return false }
         session.addOutput(photoOutput)
 
+        // Active Apple ProRAW quand le matériel le propose (iPhone 12 Pro+),
+        // sinon on retombe sur le RAW Bayer si disponible.
+        if photoOutput.isAppleProRAWSupported {
+            photoOutput.isAppleProRAWEnabled = true
+        }
+        let rawTypes = photoOutput.availableRawPhotoPixelFormatTypes
+        let hasProRAW = rawTypes.contains(where: AVCapturePhotoOutput.isAppleProRAWPixelFormat)
+        DispatchQueue.main.async {
+            self.rawSupported = !rawTypes.isEmpty
+            self.isProRAW = hasProRAW
+        }
+
         return true
     }
 
@@ -101,9 +127,26 @@ final class CameraController: NSObject, ObservableObject {
     func capturePhoto() {
         sessionQueue.async { [weak self] in
             guard let self, self.session.isRunning else { return }
-            let settings = AVCapturePhotoSettings()
-            self.photoOutput.capturePhoto(with: settings, delegate: self)
+            self.pendingRawData = nil
+            self.pendingProcessedData = nil
+            self.photoOutput.capturePhoto(with: self.makePhotoSettings(), delegate: self)
         }
+    }
+
+    /// RAW activé : capture DNG (ProRAW de préférence) + version développée
+    /// qui sert de base au rendu vintage. Sinon, capture classique.
+    private func makePhotoSettings() -> AVCapturePhotoSettings {
+        let rawTypes = photoOutput.availableRawPhotoPixelFormatTypes
+        guard rawEnabled, !rawTypes.isEmpty else { return AVCapturePhotoSettings() }
+
+        let rawFormat = rawTypes.first(where: AVCapturePhotoOutput.isAppleProRAWPixelFormat)
+            ?? rawTypes[0]
+        if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
+            return AVCapturePhotoSettings(
+                rawPixelFormatType: rawFormat,
+                processedFormat: [AVVideoCodecKey: AVVideoCodecType.hevc])
+        }
+        return AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
     }
 }
 
@@ -146,25 +189,68 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput,
                      didFinishProcessingPhoto photo: AVCapturePhoto,
                      error: Error?) {
-        guard error == nil,
-              let data = photo.fileDataRepresentation(),
-              let raw = UIImage(data: data) else { return }
+        guard error == nil, let data = photo.fileDataRepresentation() else { return }
+        if photo.isRawPhoto {
+            pendingRawData = data
+        } else {
+            pendingProcessedData = data
+        }
+    }
+
+    func photoOutput(_ output: AVCapturePhotoOutput,
+                     didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
+                     error: Error?) {
+        let rawData = pendingRawData
+        let processedData = pendingProcessedData
+        pendingRawData = nil
+        pendingProcessedData = nil
+        guard error == nil, rawData != nil || processedData != nil else { return }
 
         let lens = self.lens
         let intensity = self.intensity
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let normalized = raw.normalized(maxDimension: 3200)
-            guard let ciImage = CIImage(image: normalized),
-                  let result = LensEngine.shared.renderUIImage(ciImage,
-                                                               lens: lens,
-                                                               intensity: intensity)
-            else { return }
-            UIImageWriteToSavedPhotosAlbum(result, nil, nil, nil)
-            DispatchQueue.main.async {
-                self?.lastCaptureSaved = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
-                    self?.lastCaptureSaved = false
+            // Le rendu vintage est "développé" à partir de la version traitée ;
+            // le DNG reste, par définition, les données brutes du capteur.
+            var vintageData: Data?
+            if let processedData, let source = UIImage(data: processedData) {
+                let normalized = source.normalized(maxDimension: 3200)
+                if let ciImage = CIImage(image: normalized),
+                   let rendered = LensEngine.shared.renderUIImage(ciImage,
+                                                                  lens: lens,
+                                                                  intensity: intensity) {
+                    vintageData = rendered.jpegData(compressionQuality: 0.92)
+                }
+            }
+            self?.save(vintage: vintageData, raw: rawData)
+        }
+    }
+
+    /// Enregistre dans Photos : le rendu vintage comme image principale,
+    /// le DNG original attaché en ressource alternative (badge RAW dans Photos).
+    private func save(vintage: Data?, raw: Data?) {
+        guard vintage != nil || raw != nil else { return }
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] authStatus in
+            guard authStatus == .authorized || authStatus == .limited else { return }
+            PHPhotoLibrary.shared().performChanges {
+                let request = PHAssetCreationRequest.forAsset()
+                let rawOptions = PHAssetResourceCreationOptions()
+                rawOptions.originalFilename = "Optyx.dng"
+                if let vintage {
+                    request.addResource(with: .photo, data: vintage, options: nil)
+                    if let raw {
+                        request.addResource(with: .alternatePhoto, data: raw, options: rawOptions)
+                    }
+                } else if let raw {
+                    request.addResource(with: .photo, data: raw, options: rawOptions)
+                }
+            } completionHandler: { success, _ in
+                guard success else { return }
+                DispatchQueue.main.async {
+                    self?.lastCaptureSaved = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                        self?.lastCaptureSaved = false
+                    }
                 }
             }
         }

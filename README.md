@@ -22,8 +22,14 @@ sur vos photos existantes.
 
 - **Caméra** — viseur temps réel avec le rendu de l'objectif appliqué au flux
   vidéo, capture photo plein format enregistrée dans Photos.
-- **Studio** — import d'une photo de la photothèque, choix de l'objectif,
-  réglage d'intensité, comparaison avec l'original (appui long), export.
+- **RAW / Apple ProRAW** — bouton RAW dans le viseur : la capture enregistre
+  le DNG original (ProRAW sur iPhone 12 Pro et ultérieurs, RAW Bayer sinon)
+  joint en ressource alternative à la photo vintage. Le RAW conserve les
+  données brutes du capteur — le rendu vintage est « développé » à côté, jamais
+  détruit dans le fichier RAW.
+- **Studio** — import d'une photo de la photothèque (y compris fichiers
+  RAW/DNG, développés via `CIRAWFilter`), choix de l'objectif, réglage
+  d'intensité, comparaison avec l'original (appui long), export.
 - **Objectifs** — catalogue avec l'histoire de chaque objectif, sa signature
   optique détaillée et un aperçu de bokeh simulé sur une scène de test.
 
