@@ -49,7 +49,10 @@ sur vos photos existantes.
   **AE/AF** (exposition + mise au point), **retardateur 3 s / 5 s / 10 s**
   (pastille cyclique, compte à rebours plein écran, un tap sur le
   déclencheur annule ; différé aussi pour lancer une vidéo, jamais pour
-  l'arrêter).
+  l'arrêter), **mode rafale** (8 captures pleine qualité enchaînées —
+  rendu vintage, EXIF et profondeur pour chaque vue ; compteur sur la
+  pastille, un tap sur le déclencheur interrompt ; RAW ignoré pendant la
+  rafale pour tenir la cadence).
 - **Formats de fichier** — menu partagé caméra/Studio (mémorisé) :
   **HEIC** (défaut, moderne et léger), **JPEG** (universel), **PNG** et
   **TIFF** (sans perte). L'EXIF est préservé dans tous les formats ; la

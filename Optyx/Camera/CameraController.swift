@@ -95,6 +95,12 @@ final class CameraController: NSObject, ObservableObject {
     @Published var timerSetting: TimerSetting = .off
     @Published var countdown: Int?
 
+    /// Mode rafale : le déclencheur enchaîne `burstSize` captures pleine
+    /// qualité. `burstCountRemaining` > 0 pendant une rafale.
+    @Published var burstEnabled = false
+    @Published var burstCountRemaining = 0
+    let burstSize = 8
+
     /// Format de cadrage photo (recadrage centré appliqué avant les filtres).
     @Published var photoFormat: PhotoFormat = .fourThree {
         didSet { updatePhotoFormat() }
@@ -150,6 +156,9 @@ final class CameraController: NSObject, ObservableObject {
     private let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "optyx.camera.session")
     private let videoQueue = DispatchQueue(label: "optyx.camera.video")
+    /// File série des développements photo : borne la mémoire pendant
+    /// une rafale (un rendu pleine résolution à la fois).
+    private let renderQueue = DispatchQueue(label: "optyx.camera.render", qos: .userInitiated)
     private let videoOutput = AVCaptureVideoDataOutput()
     private let depthOutput = AVCaptureDepthDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
@@ -642,6 +651,11 @@ final class CameraController: NSObject, ObservableObject {
             cancelCountdown()
             return
         }
+        if burstCountRemaining > 0 {
+            // Un appui pendant une rafale l'interrompt.
+            burstCountRemaining = 0
+            return
+        }
         if mode == .video && isRecording {
             toggleRecording()
             return
@@ -671,6 +685,9 @@ final class CameraController: NSObject, ObservableObject {
 
     private func performShutter() {
         if mode == .photo {
+            if burstEnabled {
+                burstCountRemaining = burstSize
+            }
             capturePhoto()
         } else {
             toggleRecording()
@@ -694,7 +711,8 @@ final class CameraController: NSObject, ObservableObject {
     /// profondeur jointe quand la caméra la fournit.
     private func makePhotoSettings() -> AVCapturePhotoSettings {
         let rawTypes = photoOutput.availableRawPhotoPixelFormatTypes
-        if rawEnabled, !rawTypes.isEmpty {
+        // Le RAW est ignoré pendant une rafale pour tenir la cadence.
+        if rawEnabled, burstCountRemaining == 0, !rawTypes.isEmpty {
             let rawFormat = rawTypes.first(where: AVCapturePhotoOutput.isAppleProRAWPixelFormat)
                 ?? rawTypes[0]
             if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
@@ -1026,6 +1044,17 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
         pendingRawData = nil
         pendingProcessedData = nil
         pendingDepthData = nil
+
+        // Rafale : enchaîne la capture suivante dès que celle-ci est bouclée
+        // (le développement se poursuit en parallèle sur la file de rendu).
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.burstCountRemaining > 0 else { return }
+            self.burstCountRemaining -= 1
+            if self.burstCountRemaining > 0 {
+                self.capturePhoto()
+            }
+        }
+
         guard error == nil, rawData != nil || processedData != nil else { return }
 
         let lens = self.lens
@@ -1034,7 +1063,7 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
         let formatRatio = mode == .photo ? photoFormat.longOverShort : nil
         let exportFormat = ExportFormat.current
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        renderQueue.async { [weak self] in
             // Le rendu vintage est "développé" à partir de la version traitée ;
             // le DNG reste, par définition, les données brutes du capteur.
             var vintageData: Data?
