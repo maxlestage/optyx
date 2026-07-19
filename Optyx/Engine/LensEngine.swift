@@ -283,12 +283,17 @@ final class LensEngine {
         /// Image dont les franges sont décalées d'un delta donné.
         func aberrated(delta: Double) -> CIImage? {
             let clamped = img.clampedToExtent()
-            let red = channel(clamped, r: 1, g: 0, b: 0, keepAlpha: false)
+            // Alpha = 1 sur les TROIS canaux : les tampons intermédiaires
+            // de Core Image sont prémultipliés (RVB ≤ alpha) — un canal à
+            // alpha 0 verrait ses couleurs écrasées à zéro sur l'appareil,
+            // et seul le vert survivrait (image entièrement verte).
+            // L'alpha sommé (3) est ramené à 1 par le colorClamp final.
+            let red = channel(clamped, r: 1, g: 0, b: 0, keepAlpha: true)
                 .transformed(by: scaleAround(center, factor: 1 + delta))
                 .cropped(to: extent)
             let green = channel(clamped, r: 0, g: 1, b: 0, keepAlpha: true)
                 .cropped(to: extent)
-            let blue = channel(clamped, r: 0, g: 0, b: 1, keepAlpha: false)
+            let blue = channel(clamped, r: 0, g: 0, b: 1, keepAlpha: true)
                 .transformed(by: scaleAround(center, factor: 1 - delta))
                 .cropped(to: extent)
 
@@ -470,8 +475,9 @@ final class LensEngine {
         return (gradient.outputImage ?? CIImage.empty()).cropped(to: extent)
     }
 
-    /// Extrait un canal couleur ; `keepAlpha` conserve l'alpha sur ce canal
-    /// pour que la somme des trois canaux garde un alpha de 1.
+    /// Extrait un canal couleur. `keepAlpha` doit rester vrai pour toute
+    /// image destinée à un tampon intermédiaire : le rendu prémultiplié
+    /// impose RVB ≤ alpha et écraserait les couleurs d'un canal à alpha 0.
     private func channel(_ img: CIImage, r: CGFloat, g: CGFloat, b: CGFloat,
                          keepAlpha: Bool) -> CIImage {
         let matrix = CIFilter.colorMatrix()
