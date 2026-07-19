@@ -47,6 +47,15 @@ sur vos photos existantes.
   (TrueDepth : la profondeur reste disponible en selfie), **zoom par
   pincement** (pastille tap-pour-revenir-à-1×), verrouillage
   **AE/AF** (exposition + mise au point).
+- **Métadonnées photographe** — la photo vintage est exportée en HEIC avec
+  **tout l'EXIF de la capture d'origine** (exposition, ISO, focale réelle,
+  GPS…), la **carte de profondeur LiDAR / double objectif embarquée** en
+  donnée auxiliaire (la photo reste ré-éditable avec sa profondeur, y
+  compris dans le Studio), la **distance au sujet** mesurée sur la carte de
+  profondeur inscrite dans `SubjectDistance` / `SubjectDistRange` (l'info
+  de profondeur de champ), et l'objectif simulé consigné dans `LensModel`
+  et `UserComment`. Les exports du Studio recopient de même l'EXIF et les
+  cartes auxiliaires du fichier importé.
 - **Profondeur en direct** — sur les iPhone à LiDAR ou double capteur, la
   carte de profondeur est capturée en continu (`AVCaptureDepthDataOutput`
   synchronisée avec la vidéo) : dans le viseur comme sur la photo capturée,
