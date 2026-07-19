@@ -47,6 +47,9 @@ sur vos photos existantes.
   (TrueDepth : la profondeur reste disponible en selfie), **zoom par
   pincement** (pastille tap-pour-revenir-à-1×), verrouillage
   **AE/AF** (exposition + mise au point).
+- **Histogramme temps réel** — histogramme RVB superposé dans le viseur,
+  calculé sur le **rendu vintage affiché** (pas la scène brute) via
+  `CIAreaHistogram` à cadence réduite ; pastille pour le masquer.
 - **Métadonnées photographe** — la photo vintage est exportée en HEIC avec
   **tout l'EXIF de la capture d'origine** (exposition, ISO, focale réelle,
   GPS…), la **carte de profondeur LiDAR / double objectif embarquée** en
