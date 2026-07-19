@@ -729,7 +729,17 @@ final class CameraController: NSObject, ObservableObject {
                 guard let self else { return }
                 let fresh = DepthExtractor.range(of: map, context: self.analysisContext)
                 self.videoQueue.async {
-                    if let fresh { self.cachedDepthRange = fresh }
+                    if let fresh {
+                        // Lissage exponentiel : la normalisation évolue en
+                        // douceur, aucun saut visible entre deux mesures.
+                        if let old = self.cachedDepthRange {
+                            self.cachedDepthRange = DepthExtractor.DepthRange(
+                                min: old.min + (fresh.min - old.min) * 0.3,
+                                max: old.max + (fresh.max - old.max) * 0.3)
+                        } else {
+                            self.cachedDepthRange = fresh
+                        }
+                    }
                     self.depthRangeInFlight = false
                 }
             }

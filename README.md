@@ -43,6 +43,9 @@ sur vos photos existantes.
   réservé au pipeline de capture natif d'Apple). Audio AAC **stéréo
   48 kHz 192 kbit/s** quand le matériel le permet, débit vidéo explicite
   (~0,15 bit/pixel/s, majoré en HDR).
+- **Image plein cadre d'un tap** — un tap sur le viseur masque toutes les
+  pastilles et commandes (portrait comme paysage) ; un second tap les
+  rappelle.
 - **Toutes les orientations** — l'app suit la rotation du téléphone
   (portrait, paysage, retourné) : viseur, profondeur, photos et vidéos
   s'orientent correctement ; l'orientation est verrouillée pendant un

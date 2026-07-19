@@ -70,7 +70,10 @@ enum DepthExtractor {
                        colorSpace: nil)
         let minValue = pixels[0]
         let maxValue = pixels[4]
-        guard maxValue - minValue > 0.0001 else { return nil }
+        // Plage trop étroite (scène plate, mur uni) : la normalisation ne
+        // ferait qu'amplifier le bruit du capteur — masque instable qui
+        // fait scintiller les effets. Mieux vaut pas de masque du tout.
+        guard maxValue - minValue > 0.02 else { return nil }
         return DepthRange(min: minValue, max: maxValue)
     }
 
