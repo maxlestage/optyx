@@ -284,18 +284,23 @@ final class CameraController: NSObject, ObservableObject {
     /// Accédé uniquement depuis `videoQueue`.
     private var cachedDepthRange: DepthExtractor.DepthRange?
     private var depthFrameCounter = 0
-    private let depthRangeRefreshInterval = 5
+    /// Une mesure toutes les 10 trames (3×/s) : la plage d'une scène évolue
+    /// lentement, et chaque mesure évitée est un aller-retour GPU→CPU en
+    /// moins sur la file d'analyse. Divise aussi par deux la fréquence de
+    /// toute oscillation résiduelle de la normalisation.
+    private let depthRangeRefreshInterval = 10
     /// Débounce de l'état du masque de profondeur. Mesuré sur appareil :
     /// une plage effacée dès la première mesure rejetée puis réacquise
     /// 1-2 trames plus tard faisait clignoter le halo de l'arrière-plan
     /// (flash sombre périodique dans le viseur). L'acquisition exige
-    /// 2 mesures bonnes consécutives ; le relâchement exige 12 rejets
-    /// consécutifs (~2 s) — une plage conservée sur une carte devenue
-    /// plate reste stable grâce au flou de mesure et à la zone morte.
+    /// 2 mesures bonnes consécutives ; le relâchement exige 6 rejets
+    /// consécutifs (~2 s à une mesure toutes les 10 trames) — une plage
+    /// conservée sur une carte devenue plate reste stable grâce au flou
+    /// de mesure et à la zone morte.
     private var depthRangeGoodStreak = 0
     private var depthRangeMissStreak = 0
     private let depthRangeAcquireStreak = 2
-    private let depthRangeReleaseStreak = 12
+    private let depthRangeReleaseStreak = 6
 
     /// Anneau de pixel buffers réutilisables dans lesquels la chaîne de
     /// filtres est rendue une seule fois par trame ; le renderer Metal ne
@@ -730,6 +735,11 @@ final class CameraController: NSObject, ObservableObject {
     /// Version pour le flux direct : réutilise la plage min/max mise en
     /// cache et ne la rafraîchit que périodiquement. Appelée sur `videoQueue`.
     private func liveBackgroundMask(from depthData: AVDepthData) -> CIImage? {
+        // Conversion en disparité float32 conservée à dessein : la carte
+        // native peut être en MÈTRES (profondeur) selon le capteur, or
+        // tous les seuils (acquisition, maintien, zone morte) sont
+        // calibrés en unités de disparité 0…1. La carte est minuscule
+        // (~300×200 px), la conversion est négligeable.
         let disparity = depthData.converting(
             toDepthDataType: kCVPixelFormatType_DisparityFloat32)
         let map = CIImage(cvPixelBuffer: disparity.depthDataMap).oriented(sensorOrientation)
@@ -756,18 +766,24 @@ final class CameraController: NSObject, ObservableObject {
                         self.depthRangeMissStreak = 0
                         if let old = self.cachedDepthRange {
                             // Zone morte : une mesure qui ne bouge que dans
-                            // le bruit (< 10 % de la plage) ne change RIEN —
-                            // masque parfaitement immobile sur une scène
-                            // statique. Au-delà, lissage exponentiel.
+                            // le bruit ne change RIEN — masque parfaitement
+                            // immobile sur une scène statique. Plancher
+                            // absolu (0.01) : sur une scène à faible
+                            // relief, 10 % d'une plage minuscule était
+                            // plus petit que le bruit du capteur — la
+                            // plage dérivait par lissage puis se
+                            // réinitialisait (dent de scie de luminosité
+                            // mesurée à ~4 Hz sur enregistrement).
+                            // Au-delà, lissage exponentiel doux (0.15).
                             let span = max(old.max - old.min, 0.001)
-                            let deadband = span * 0.1
+                            let deadband = max(span * 0.1, 0.01)
                             if abs(fresh.min - old.min) < deadband,
                                abs(fresh.max - old.max) < deadband {
                                 // Plage conservée telle quelle.
                             } else {
                                 self.cachedDepthRange = DepthExtractor.DepthRange(
-                                    min: old.min + (fresh.min - old.min) * 0.3,
-                                    max: old.max + (fresh.max - old.max) * 0.3)
+                                    min: old.min + (fresh.min - old.min) * 0.15,
+                                    max: old.max + (fresh.max - old.max) * 0.15)
                             }
                         } else {
                             // Débounce d'acquisition : une seule mesure
