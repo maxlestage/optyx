@@ -47,6 +47,8 @@ struct CameraView: View {
                         if camera.depthAvailable { depthToggle }
                         if camera.rawSupported && camera.mode == .photo { rawToggle }
                         histogramToggle
+                        zebraToggle
+                        peakingToggle
                     }
                     .padding(.horizontal)
                 }
@@ -128,6 +130,44 @@ struct CameraView: View {
                                    : Color.white.opacity(0.15))
                 )
                 .foregroundStyle(camera.histogramEnabled ? .black : .white)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Zébras : hachures sur les zones surexposées (viseur uniquement).
+    private var zebraToggle: some View {
+        Button {
+            camera.zebrasEnabled.toggle()
+        } label: {
+            Text("Zébras")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(camera.zebrasEnabled
+                                   ? Color.orange.opacity(0.9)
+                                   : Color.white.opacity(0.15))
+                )
+                .foregroundStyle(camera.zebrasEnabled ? .black : .white)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Focus peaking : contours nets surlignés en vert (viseur uniquement).
+    private var peakingToggle: some View {
+        Button {
+            camera.peakingEnabled.toggle()
+        } label: {
+            Text("Peaking")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(camera.peakingEnabled
+                                   ? Color.orange.opacity(0.9)
+                                   : Color.white.opacity(0.15))
+                )
+                .foregroundStyle(camera.peakingEnabled ? .black : .white)
         }
         .buttonStyle(.plain)
     }
