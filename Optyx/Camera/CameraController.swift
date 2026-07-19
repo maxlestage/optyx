@@ -223,10 +223,13 @@ final class CameraController: NSObject, ObservableObject {
     private var depthFrameCounter = 0
     private let depthRangeRefreshInterval = 5
 
-    /// Pool de pixel buffers dans lesquels la chaîne de filtres est rendue
-    /// une seule fois par trame ; le renderer Metal ne fait que les afficher.
+    /// Anneau de pixel buffers réutilisables dans lesquels la chaîne de
+    /// filtres est rendue une seule fois par trame ; le renderer Metal ne
+    /// fait que les afficher. Cinq buffers en rotation : l'affichage et
+    /// l'encodeur vidéo peuvent en retenir pendant qu'on écrit le suivant.
     /// Accédé uniquement depuis `videoQueue`.
-    private var previewBufferPool: CVPixelBufferPool?
+    private var previewBuffers: [CVPixelBuffer] = []
+    private var previewBufferIndex = 0
     private var previewBufferSize = CGSize.zero
     private var didPublishFirstFrame = false
 
@@ -576,7 +579,9 @@ final class CameraController: NSObject, ObservableObject {
     }
 
     /// Fournit un pixel buffer compatible Metal à la taille de l'aperçu,
-    /// en recréant le pool si la taille change.
+    /// en recréant l'anneau de buffers si la taille ou le format change.
+    /// (Allocation directe via CVPixelBufferCreate : dans le SDK iOS 26,
+    /// CVPixelBufferPoolCreateBuffer n'est plus exposé à Swift.)
     private func makePreviewBuffer(for extent: CGRect) -> CVPixelBuffer? {
         // Dimensions paires : requis par l'encodeur HEVC du mode vidéo.
         let width = Int(extent.width.rounded()) & ~1
@@ -584,33 +589,31 @@ final class CameraController: NSObject, ObservableObject {
         guard width > 0, height > 0 else { return nil }
 
         let size = CGSize(width: width, height: height)
-        if previewBufferPool == nil || previewBufferSize != size
+        if previewBuffers.isEmpty || previewBufferSize != size
             || previewBufferHDR != hdrActive {
             // 10 bits en HDR, BGRA 8 bits sinon.
             let pixelFormat = hdrActive
                 ? kCVPixelFormatType_ARGB2101010LEPacked
                 : kCVPixelFormatType_32BGRA
             let attributes: [String: Any] = [
-                kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
-                kCVPixelBufferWidthKey as String: width,
-                kCVPixelBufferHeightKey as String: height,
                 kCVPixelBufferMetalCompatibilityKey as String: true,
                 kCVPixelBufferIOSurfacePropertiesKey as String: [:],
             ]
+            previewBuffers = (0..<5).compactMap { _ in
+                var buffer: CVPixelBuffer?
+                CVPixelBufferCreate(kCFAllocatorDefault, width, height,
+                                    pixelFormat, attributes as CFDictionary,
+                                    &buffer)
+                return buffer
+            }
+            previewBufferIndex = 0
             previewBufferHDR = hdrActive
-            let poolAttributes: [String: Any] = [
-                kCVPixelBufferPoolMinimumBufferCountKey as String: 3,
-            ]
-            var pool: CVPixelBufferPool?
-            CVPixelBufferPoolCreate(nil, poolAttributes as CFDictionary,
-                                    attributes as CFDictionary, &pool)
-            previewBufferPool = pool
             previewBufferSize = size
         }
 
-        guard let pool = previewBufferPool else { return nil }
-        var buffer: CVPixelBuffer?
-        CVPixelBufferPoolCreateBuffer(nil, pool, &buffer)
+        guard !previewBuffers.isEmpty else { return nil }
+        let buffer = previewBuffers[previewBufferIndex]
+        previewBufferIndex = (previewBufferIndex + 1) % previewBuffers.count
         return buffer
     }
 
