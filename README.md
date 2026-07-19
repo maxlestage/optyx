@@ -50,6 +50,11 @@ sur vos photos existantes.
   (pastille cyclique, compte à rebours plein écran, un tap sur le
   déclencheur annule ; différé aussi pour lancer une vidéo, jamais pour
   l'arrêter).
+- **Formats de fichier** — menu partagé caméra/Studio (mémorisé) :
+  **HEIC** (défaut, moderne et léger), **JPEG** (universel), **PNG** et
+  **TIFF** (sans perte). L'EXIF est préservé dans tous les formats ; la
+  carte de profondeur embarquée n'existe qu'en HEIC et JPEG (limite des
+  conteneurs) ; le DNG ProRAW reste géré par la pastille RAW.
 - **Formats photo** — menu de cadrage dans le viseur : **4:3** natif,
   **3:2** (film 135), **1:1** (6×6 moyen format), **16:9** et **65:24**
   (panoramique XPan). Recadrage centré appliqué **avant** la chaîne de

@@ -7,6 +7,12 @@ struct CameraView: View {
     @State private var intensity: Double = 1.0
     /// Zoom au début du pincement en cours.
     @State private var pinchBaseZoom: CGFloat = 1
+    /// Format de fichier des exports photo (partagé avec le Studio).
+    @AppStorage("exportFormat") private var exportFormatRaw = ExportFormat.heic.rawValue
+
+    private var exportFormat: ExportFormat {
+        ExportFormat(rawValue: exportFormatRaw) ?? .heic
+    }
 
     var body: some View {
         ZStack {
@@ -47,6 +53,7 @@ struct CameraView: View {
                         if camera.depthAvailable { depthToggle }
                         timerToggle
                         if camera.mode == .photo { formatMenu }
+                        if camera.mode == .photo { fileFormatMenu }
                         if camera.rawSupported && camera.mode == .photo { rawToggle }
                         histogramToggle
                         zebraToggle
@@ -235,6 +242,35 @@ struct CameraView: View {
                                    : Color.white.opacity(0.15))
                 )
                 .foregroundStyle(camera.photoFormat != .fourThree ? .black : .white)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Format de fichier des exports : HEIC, JPEG, PNG ou TIFF.
+    private var fileFormatMenu: some View {
+        Menu {
+            ForEach(ExportFormat.allCases, id: \.self) { format in
+                Button {
+                    exportFormatRaw = format.rawValue
+                } label: {
+                    if exportFormat == format {
+                        Label(format.title, systemImage: "checkmark")
+                    } else {
+                        Text(format.title)
+                    }
+                }
+            }
+        } label: {
+            Text(exportFormat.label)
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(exportFormat != .heic
+                                   ? Color.orange.opacity(0.9)
+                                   : Color.white.opacity(0.15))
+                )
+                .foregroundStyle(exportFormat != .heic ? .black : .white)
         }
         .buttonStyle(.plain)
     }

@@ -3,6 +3,50 @@ import ImageIO
 import UIKit
 import UniformTypeIdentifiers
 
+/// Format de fichier des exports photo, partagé entre la caméra et le
+/// Studio (persisté dans UserDefaults sous la clé "exportFormat").
+enum ExportFormat: String, CaseIterable {
+    case heic
+    case jpeg
+    case png
+    case tiff
+
+    var utType: UTType {
+        switch self {
+        case .heic: return .heic
+        case .jpeg: return .jpeg
+        case .png: return .png
+        case .tiff: return .tiff
+        }
+    }
+
+    /// Libellé court de la pastille.
+    var label: String { rawValue.uppercased() }
+
+    /// Libellé détaillé du menu.
+    var title: String {
+        switch self {
+        case .heic: return "HEIC — moderne, léger (défaut)"
+        case .jpeg: return "JPEG — universel"
+        case .png: return "PNG — sans perte"
+        case .tiff: return "TIFF — sans perte, archivage"
+        }
+    }
+
+    /// Compression avec perte (qualité réglée à 0,92).
+    var isLossy: Bool { self == .heic || self == .jpeg }
+
+    /// Seuls HEIC et JPEG savent embarquer les cartes auxiliaires
+    /// (profondeur, matte portrait).
+    var supportsDepthData: Bool { self == .heic || self == .jpeg }
+
+    /// Réglage courant persisté.
+    static var current: ExportFormat {
+        ExportFormat(rawValue: UserDefaults.standard.string(forKey: "exportFormat") ?? "")
+            ?? .heic
+    }
+}
+
 /// Construit le fichier photo final pour les photographes : rendu vintage
 /// + métadonnées EXIF/TIFF/GPS de la capture d'origine préservées
 /// + carte de profondeur (LiDAR / double objectif) embarquée en donnée
@@ -25,7 +69,8 @@ enum PhotoMetadata {
                                  originalData: Data?,
                                  depthData: AVDepthData?,
                                  lens: LensProfile,
-                                 intensity: Double) -> Data? {
+                                 intensity: Double,
+                                 format: ExportFormat = .heic) -> Data? {
         guard let cgImage = rendered.cgImage else { return nil }
 
         let source = originalData.flatMap { CGImageSourceCreateWithData($0 as CFData, nil) }
@@ -50,17 +95,21 @@ enum PhotoMetadata {
             exif[kCGImagePropertyExifSubjectDistRange] = distanceRange(distance)
         }
         properties[kCGImagePropertyExifDictionary] = exif
-        properties[kCGImageDestinationLossyCompressionQuality] = 0.92
+        if format.isLossy {
+            properties[kCGImageDestinationLossyCompressionQuality] = 0.92
+        }
 
         let data = NSMutableData()
         guard let destination =
-                CGImageDestinationCreateWithData(data, UTType.heic.identifier as CFString, 1, nil)
+                CGImageDestinationCreateWithData(data, format.utType.identifier as CFString, 1, nil)
                 ?? CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil)
         else { return nil }
 
         CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
 
-        if let depthData {
+        if !format.supportsDepthData {
+            // PNG/TIFF : pas de cartes auxiliaires (métadonnées EXIF seules).
+        } else if let depthData {
             // Capture caméra : profondeur AVFoundation embarquée telle quelle.
             var auxTypeOut: NSString?
             if let auxDict = depthData.dictionaryRepresentation(forAuxiliaryDataType: &auxTypeOut),

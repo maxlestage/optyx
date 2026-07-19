@@ -2,6 +2,7 @@ import AVFoundation
 import CoreImage
 import Photos
 import UIKit
+import UniformTypeIdentifiers
 
 /// Gère la session de capture : flux vidéo filtré en temps réel
 /// par le moteur de rendu, profondeur en direct (LiDAR / double capteur),
@@ -1031,6 +1032,7 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
         let intensity = self.intensity
         let orientation = self.sensorOrientation
         let formatRatio = mode == .photo ? photoFormat.longOverShort : nil
+        let exportFormat = ExportFormat.current
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             // Le rendu vintage est "développé" à partir de la version traitée ;
@@ -1051,24 +1053,26 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
                                                                   lens: lens,
                                                                   intensity: intensity,
                                                                   backgroundMask: mask) {
-                    // HEIC avec l'EXIF de la capture, la carte de profondeur
-                    // embarquée et la distance au sujet mesurée.
+                    // Format d'export choisi, avec l'EXIF de la capture, la
+                    // carte de profondeur embarquée (HEIC/JPEG) et la
+                    // distance au sujet mesurée.
                     vintageData = PhotoMetadata.vintageImageData(
                         rendered: rendered,
                         originalData: processedData,
                         depthData: depthData,
                         lens: lens,
-                        intensity: intensity)
+                        intensity: intensity,
+                        format: exportFormat)
                         ?? rendered.jpegData(compressionQuality: 0.92)
                 }
             }
-            self?.save(vintage: vintageData, raw: rawData)
+            self?.save(vintage: vintageData, raw: rawData, format: exportFormat)
         }
     }
 
     /// Enregistre dans Photos : le rendu vintage comme image principale,
     /// le DNG original attaché en ressource alternative (badge RAW dans Photos).
-    private func save(vintage: Data?, raw: Data?) {
+    private func save(vintage: Data?, raw: Data?, format: ExportFormat) {
         guard vintage != nil || raw != nil else { return }
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] authStatus in
             guard authStatus == .authorized || authStatus == .limited else { return }
@@ -1076,8 +1080,10 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
                 let request = PHAssetCreationRequest.forAsset()
                 let rawOptions = PHAssetResourceCreationOptions()
                 rawOptions.originalFilename = "Optyx.dng"
+                let vintageOptions = PHAssetResourceCreationOptions()
+                vintageOptions.uniformTypeIdentifier = format.utType.identifier
                 if let vintage {
-                    request.addResource(with: .photo, data: vintage, options: nil)
+                    request.addResource(with: .photo, data: vintage, options: vintageOptions)
                     if let raw {
                         request.addResource(with: .alternatePhoto, data: raw, options: rawOptions)
                     }
