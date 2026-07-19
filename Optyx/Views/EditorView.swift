@@ -2,6 +2,7 @@ import CoreImage
 import Photos
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
 
 /// Studio : applique un objectif vintage à une photo de la photothèque.
 struct EditorView: View {
@@ -22,6 +23,12 @@ struct EditorView: View {
     /// Données brutes du fichier importé : EXIF et cartes auxiliaires
     /// (profondeur, matte) à préserver dans l'export.
     @State private var originalData: Data?
+    /// Format de fichier des exports (partagé avec la caméra).
+    @AppStorage("exportFormat") private var exportFormatRaw = ExportFormat.heic.rawValue
+
+    private var exportFormat: ExportFormat {
+        ExportFormat(rawValue: exportFormatRaw) ?? .heic
+    }
 
     var body: some View {
         NavigationStack {
@@ -35,6 +42,24 @@ struct EditorView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     PhotosPicker(selection: $pickerItem, matching: .images) {
                         Label("Importer", systemImage: "photo.badge.plus")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        ForEach(ExportFormat.allCases, id: \.self) { format in
+                            Button {
+                                exportFormatRaw = format.rawValue
+                            } label: {
+                                if exportFormat == format {
+                                    Label(format.title, systemImage: "checkmark")
+                                } else {
+                                    Text(format.title)
+                                }
+                            }
+                        }
+                    } label: {
+                        Text(exportFormat.label)
+                            .font(.caption.weight(.bold))
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -202,9 +227,10 @@ struct EditorView: View {
         let intensity = self.intensity
         let mask = activeMask
         let sourceData = originalData
+        let format = exportFormat
         Task.detached(priority: .userInitiated) {
-            // Export avec l'EXIF d'origine et les cartes auxiliaires
-            // (profondeur, matte portrait) recopiées dans le fichier.
+            // Export au format choisi, avec l'EXIF d'origine et les cartes
+            // auxiliaires (profondeur, matte portrait) recopiées (HEIC/JPEG).
             var exportData: Data?
             if let result = LensEngine.shared.renderUIImage(input, lens: lens,
                                                             intensity: intensity,
@@ -214,7 +240,8 @@ struct EditorView: View {
                     originalData: sourceData,
                     depthData: nil,
                     lens: lens,
-                    intensity: intensity)
+                    intensity: intensity,
+                    format: format)
                     ?? result.jpegData(compressionQuality: 0.92)
             }
             guard let exportData else {
@@ -227,8 +254,10 @@ struct EditorView: View {
                     return
                 }
                 PHPhotoLibrary.shared().performChanges {
+                    let options = PHAssetResourceCreationOptions()
+                    options.uniformTypeIdentifier = format.utType.identifier
                     PHAssetCreationRequest.forAsset()
-                        .addResource(with: .photo, data: exportData, options: nil)
+                        .addResource(with: .photo, data: exportData, options: options)
                 } completionHandler: { success, _ in
                     DispatchQueue.main.async {
                         if success {
