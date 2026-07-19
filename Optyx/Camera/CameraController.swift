@@ -208,6 +208,60 @@ final class CameraController: NSObject, ObservableObject {
     /// (miroir pour la caméra frontale, façon selfie).
     private var cameraPosition: AVCaptureDevice.Position = .back
     private var sensorOrientation: CGImagePropertyOrientation = .right
+    /// Dernière orientation physique stable de l'appareil (fil principal).
+    private var deviceOrientation: UIDeviceOrientation = .portrait
+
+    override init() {
+        super.init()
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(deviceOrientationDidChange),
+            name: UIDevice.orientationDidChangeNotification, object: nil)
+    }
+
+    /// Suit la rotation du téléphone : le viseur, la profondeur, les photos
+    /// et les vidéos s'orientent dans tous les sens. Verrouillé pendant un
+    /// enregistrement (les dimensions ne peuvent pas changer en cours de
+    /// fichier).
+    @objc private func deviceOrientationDidChange() {
+        let orientation = UIDevice.current.orientation
+        guard orientation == .portrait || orientation == .portraitUpsideDown
+            || orientation == .landscapeLeft || orientation == .landscapeRight
+        else { return }
+        deviceOrientation = orientation
+        let frame = Self.frameOrientation(for: orientation, position: cameraPosition)
+        videoQueue.async { [weak self] in
+            guard let self, !self.recordingActive else { return }
+            self.sensorOrientation = frame
+        }
+    }
+
+    /// Rotation à appliquer aux trames capteur pour l'orientation donnée
+    /// (correspondance classique des exemples AVFoundation d'Apple).
+    private static func frameOrientation(for device: UIDeviceOrientation,
+                                         position: AVCaptureDevice.Position)
+        -> CGImagePropertyOrientation {
+        switch (device, position) {
+        case (.portraitUpsideDown, .front): return .rightMirrored
+        case (.portraitUpsideDown, _): return .left
+        case (.landscapeLeft, .front): return .downMirrored
+        case (.landscapeLeft, _): return .up
+        case (.landscapeRight, .front): return .upMirrored
+        case (.landscapeRight, _): return .down
+        case (_, .front): return .leftMirrored
+        default: return .right
+        }
+    }
+
+    /// Angle de rotation (iOS 17) pour la connexion photo.
+    private static func rotationAngle(for device: UIDeviceOrientation) -> CGFloat {
+        switch device {
+        case .portraitUpsideDown: return 270
+        case .landscapeLeft: return 0
+        case .landscapeRight: return 180
+        default: return 90
+        }
+    }
 
     /// Histogramme : calculé une trame sur `histogramInterval` (lecture
     /// GPU→CPU de 64 bins seulement). Compteur confiné à `videoQueue`.
@@ -307,13 +361,16 @@ final class CameraController: NSObject, ObservableObject {
               session.canAddInput(input) else { return false }
         session.addInput(input)
         videoDevice = device
-        sensorOrientation = cameraPosition == .front ? .leftMirrored : .right
+        sensorOrientation = Self.frameOrientation(for: deviceOrientation,
+                                                  position: cameraPosition)
 
-        videoOutput.videoSettings =
-            [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         videoOutput.alwaysDiscardsLateVideoFrames = true
         guard session.canAddOutput(videoOutput) else { return false }
         session.addOutput(videoOutput)
+        // Après l'ajout à la session : une demande de format posée avant
+        // peut être ignorée et la sortie livrerait du YUV au lieu du BGRA.
+        videoOutput.videoSettings =
+            [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
 
         guard session.canAddOutput(photoOutput) else { return false }
         session.addOutput(photoOutput)
@@ -424,12 +481,23 @@ final class CameraController: NSObject, ObservableObject {
 
         // Exécute la chaîne de filtres une seule fois, dans un pixel buffer ;
         // l'affichage Metal ne fera que recopier cette texture.
+        // Origine ramenée à zéro et bornes calées exactement sur le buffer
+        // (dimensions paires) : un rectangle décalé ou plus grand que le
+        // buffer laisserait des pixels non écrits.
+        let sourceExtent = processed.extent
+        processed = processed.transformed(by: CGAffineTransform(
+            translationX: -sourceExtent.minX, y: -sourceExtent.minY))
         guard let buffer = makePreviewBuffer(for: processed.extent) else { return }
+        let targetRect = CGRect(x: 0, y: 0,
+                                width: CVPixelBufferGetWidth(buffer),
+                                height: CVPixelBufferGetHeight(buffer))
+        processed = processed.cropped(to: targetRect)
         let colorSpace = hdrActive
-            ? (CGColorSpace(name: CGColorSpace.itur_2100_HLG) ?? CGColorSpaceCreateDeviceRGB())
-            : CGColorSpaceCreateDeviceRGB()
+            ? (CGColorSpace(name: CGColorSpace.itur_2100_HLG)
+               ?? CGColorSpace(name: CGColorSpace.sRGB)!)
+            : CGColorSpace(name: CGColorSpace.sRGB)!
         LensEngine.shared.context.render(processed, to: buffer,
-                                         bounds: processed.extent,
+                                         bounds: targetRect,
                                          colorSpace: colorSpace)
         // Les aides visuelles (zébras, peaking) ne touchent que l'affichage :
         // le buffer enregistré et les photos restent vierges.
@@ -707,6 +775,13 @@ final class CameraController: NSObject, ObservableObject {
             self.pendingRawData = nil
             self.pendingProcessedData = nil
             self.pendingDepthData = nil
+            // Oriente la photo selon la tenue actuelle du téléphone.
+            if let connection = self.photoOutput.connection(with: .video) {
+                let angle = Self.rotationAngle(for: self.deviceOrientation)
+                if connection.isVideoRotationAngleSupported(angle) {
+                    connection.videoRotationAngle = angle
+                }
+            }
             self.photoOutput.capturePhoto(with: self.makePhotoSettings(), delegate: self)
         }
     }
@@ -951,9 +1026,12 @@ final class CameraController: NSObject, ObservableObject {
         recordingTimer?.invalidate()
         recordingTimer = nil
         isRecording = false
+        // Resynchronise l'orientation, verrouillée pendant l'enregistrement.
+        let frame = Self.frameOrientation(for: deviceOrientation, position: cameraPosition)
         videoQueue.async { [weak self] in
             guard let self else { return }
             self.recordingActive = false
+            self.sensorOrientation = frame
             let recorder = self.recorder
             self.recorder = nil
             recorder?.finish { [weak self] url in
