@@ -21,6 +21,13 @@ final class CameraController: NSObject, ObservableObject {
         case video
     }
 
+    /// Histogramme RVB du rendu affiché (valeurs normalisées 0…1 par canal).
+    struct HistogramData: Equatable {
+        let red: [Float]
+        let green: [Float]
+        let blue: [Float]
+    }
+
     @Published var status: Status = .idle
     @Published var lastCaptureSaved = false
     /// Passe à vrai dès que la première trame filtrée est affichée.
@@ -53,6 +60,10 @@ final class CameraController: NSObject, ObservableObject {
     @Published var zoomFactor: CGFloat = 1
     /// Caméra frontale active ?
     @Published var isFrontCamera = false
+    /// Histogramme temps réel affiché dans le viseur.
+    @Published var histogramEnabled = true
+    /// Dernier histogramme calculé (sur le rendu vintage, pas la scène brute).
+    @Published var histogram: HistogramData?
 
     /// Affichage Metal du viseur : reçoit les trames déjà rendues.
     let previewRenderer = PreviewRenderer()
@@ -119,6 +130,12 @@ final class CameraController: NSObject, ObservableObject {
     /// (miroir pour la caméra frontale, façon selfie).
     private var cameraPosition: AVCaptureDevice.Position = .back
     private var sensorOrientation: CGImagePropertyOrientation = .right
+
+    /// Histogramme : calculé une trame sur `histogramInterval` (lecture
+    /// GPU→CPU de 64 bins seulement). Compteur confiné à `videoQueue`.
+    private var histogramFrameCounter = 0
+    private let histogramInterval = 3
+    private let histogramBins = 64
 
     /// Cache de la plage de profondeur du flux direct : la mesure min/max
     /// (aller-retour GPU→CPU) n'est refaite qu'une image sur
@@ -342,6 +359,53 @@ final class CameraController: NSObject, ObservableObject {
         if !didPublishFirstFrame {
             didPublishFirstFrame = true
             DispatchQueue.main.async { [weak self] in self?.hasFrame = true }
+        }
+
+        // Histogramme du rendu affiché (buffer déjà rendu : aucun filtre
+        // re-exécuté), à cadence réduite.
+        if histogramEnabled {
+            histogramFrameCounter += 1
+            if histogramFrameCounter % histogramInterval == 0 {
+                computeHistogram(from: CIImage(cvPixelBuffer: buffer))
+            }
+        }
+    }
+
+    /// Histogramme RVB via CIAreaHistogram (64 bins), normalisé par canal
+    /// pour l'affichage.
+    private func computeHistogram(from image: CIImage) {
+        let filter = CIFilter.areaHistogram()
+        filter.inputImage = image
+        filter.extent = image.extent
+        filter.count = histogramBins
+        filter.scale = 1
+        guard let output = filter.outputImage else { return }
+
+        var values = [Float](repeating: 0, count: histogramBins * 4)
+        LensEngine.shared.context.render(output,
+                                         toBitmap: &values,
+                                         rowBytes: histogramBins * 16,
+                                         bounds: CGRect(x: 0, y: 0,
+                                                        width: histogramBins, height: 1),
+                                         format: .RGBAf,
+                                         colorSpace: nil)
+
+        var red = [Float](repeating: 0, count: histogramBins)
+        var green = red
+        var blue = red
+        for bin in 0..<histogramBins {
+            red[bin] = values[bin * 4]
+            green[bin] = values[bin * 4 + 1]
+            blue[bin] = values[bin * 4 + 2]
+        }
+        let peak = max(red.max() ?? 0, green.max() ?? 0, blue.max() ?? 0)
+        guard peak > 0 else { return }
+        let data = HistogramData(red: red.map { $0 / peak },
+                                 green: green.map { $0 / peak },
+                                 blue: blue.map { $0 / peak })
+
+        DispatchQueue.main.async { [weak self] in
+            self?.histogram = data
         }
     }
 

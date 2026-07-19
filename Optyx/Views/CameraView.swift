@@ -46,10 +46,22 @@ struct CameraView: View {
                         if camera.mode == .video { letterboxToggle }
                         if camera.depthAvailable { depthToggle }
                         if camera.rawSupported && camera.mode == .photo { rawToggle }
+                        histogramToggle
                     }
                     .padding(.horizontal)
                 }
                 .padding(.top, 4)
+
+                if camera.histogramEnabled, let histogram = camera.histogram {
+                    HStack {
+                        HistogramView(data: histogram)
+                            .frame(width: 132, height: 64)
+                        Spacer()
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 6)
+                }
+
                 Spacer()
                 controls
             }
@@ -99,6 +111,25 @@ struct CameraView: View {
         }
         .buttonStyle(.plain)
         .disabled(camera.isRecording)
+    }
+
+    /// Affiche/masque l'histogramme temps réel.
+    private var histogramToggle: some View {
+        Button {
+            camera.histogramEnabled.toggle()
+        } label: {
+            Image(systemName: "chart.bar.fill")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(camera.histogramEnabled
+                                   ? Color.orange.opacity(0.9)
+                                   : Color.white.opacity(0.15))
+                )
+                .foregroundStyle(camera.histogramEnabled ? .black : .white)
+        }
+        .buttonStyle(.plain)
     }
 
     /// Bascule caméra arrière ↔ frontale.
