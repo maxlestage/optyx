@@ -285,6 +285,17 @@ final class CameraController: NSObject, ObservableObject {
     private var cachedDepthRange: DepthExtractor.DepthRange?
     private var depthFrameCounter = 0
     private let depthRangeRefreshInterval = 5
+    /// Débounce de l'état du masque de profondeur. Mesuré sur appareil :
+    /// une plage effacée dès la première mesure rejetée puis réacquise
+    /// 1-2 trames plus tard faisait clignoter le halo de l'arrière-plan
+    /// (flash sombre périodique dans le viseur). L'acquisition exige
+    /// 2 mesures bonnes consécutives ; le relâchement exige 12 rejets
+    /// consécutifs (~2 s) — une plage conservée sur une carte devenue
+    /// plate reste stable grâce au flou de mesure et à la zone morte.
+    private var depthRangeGoodStreak = 0
+    private var depthRangeMissStreak = 0
+    private let depthRangeAcquireStreak = 2
+    private let depthRangeReleaseStreak = 12
 
     /// Anneau de pixel buffers réutilisables dans lesquels la chaîne de
     /// filtres est rendue une seule fois par trame ; le renderer Metal ne
@@ -302,6 +313,8 @@ final class CameraController: NSObject, ObservableObject {
         videoQueue.async { [weak self] in
             self?.cachedDepthRange = nil
             self?.depthFrameCounter = 0
+            self?.depthRangeGoodStreak = 0
+            self?.depthRangeMissStreak = 0
         }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
@@ -740,6 +753,7 @@ final class CameraController: NSObject, ObservableObject {
                                                  minSpan: minSpan)
                 self.videoQueue.async {
                     if let fresh {
+                        self.depthRangeMissStreak = 0
                         if let old = self.cachedDepthRange {
                             // Zone morte : une mesure qui ne bouge que dans
                             // le bruit (< 10 % de la plage) ne change RIEN —
@@ -756,14 +770,34 @@ final class CameraController: NSObject, ObservableObject {
                                     max: old.max + (fresh.max - old.max) * 0.3)
                             }
                         } else {
-                            self.cachedDepthRange = fresh
+                            // Débounce d'acquisition : une seule mesure
+                            // bonne peut n'être qu'un pic de bruit — on en
+                            // exige deux consécutives avant d'activer le
+                            // masque (sinon il apparaît pour une trame et
+                            // disparaît : flash visible).
+                            self.depthRangeGoodStreak += 1
+                            if self.depthRangeGoodStreak >= self.depthRangeAcquireStreak {
+                                self.cachedDepthRange = fresh
+                                self.depthRangeGoodStreak = 0
+                            }
                         }
                     } else {
-                        // Scène plate ou mesure invalide : on EFFACE la
-                        // plage — une ancienne plage appliquée à une carte
-                        // plate ne ferait qu'amplifier le bruit (masque
-                        // stroboscopique = scintillement des effets).
-                        self.cachedDepthRange = nil
+                        self.depthRangeGoodStreak = 0
+                        // Période de grâce : une mesure rejetée n'efface
+                        // PLUS la plage immédiatement — l'ancienne plage
+                        // appliquée à une carte momentanément plate reste
+                        // stable (flou de mesure + zone morte), alors que
+                        // l'effacement immédiat suivi d'une réacquisition
+                        // 1-2 trames plus tard faisait clignoter le halo
+                        // de l'arrière-plan (mesuré sur enregistrement :
+                        // flash sombre périodique). On n'efface qu'après
+                        // ~2 s de rejets consécutifs : la scène est alors
+                        // réellement plate, et le masque s'en va une fois,
+                        // proprement.
+                        self.depthRangeMissStreak += 1
+                        if self.depthRangeMissStreak >= self.depthRangeReleaseStreak {
+                            self.cachedDepthRange = nil
+                        }
                     }
                     self.depthRangeInFlight = false
                 }
@@ -1029,6 +1063,8 @@ final class CameraController: NSObject, ObservableObject {
         videoQueue.async { [weak self] in
             self?.cachedDepthRange = nil
             self?.depthFrameCounter = 0
+            self?.depthRangeGoodStreak = 0
+            self?.depthRangeMissStreak = 0
         }
         sessionQueue.async { [weak self] in
             guard let self else { return }
