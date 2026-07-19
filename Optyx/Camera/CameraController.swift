@@ -68,6 +68,8 @@ final class CameraController: NSObject, ObservableObject {
     @Published var zebrasEnabled = false
     /// Focus peaking : contours nets surlignés en vert (viseur uniquement).
     @Published var peakingEnabled = false
+    /// Grille des tiers (viseur uniquement).
+    @Published var gridEnabled = false
 
     /// Affichage Metal du viseur : reçoit les trames déjà rendues.
     let previewRenderer = PreviewRenderer()
@@ -378,11 +380,12 @@ final class CameraController: NSObject, ObservableObject {
     }
 
     /// Aides visuelles du viseur, appliquées par-dessus le rendu déjà écrit :
-    /// zébras (hachures blanches sur les hautes lumières ≥ 95 %) et focus
-    /// peaking (contours nets surlignés en vert). Filtres légers exécutés
-    /// au blit Metal uniquement — jamais dans les fichiers capturés.
+    /// zébras (hachures blanches sur les hautes lumières ≥ 95 %), focus
+    /// peaking (contours nets surlignés en vert) et grille des tiers.
+    /// Filtres légers exécutés au blit Metal uniquement — jamais dans les
+    /// fichiers capturés.
     private func assistOverlays(on image: CIImage) -> CIImage {
-        guard zebrasEnabled || peakingEnabled else { return image }
+        guard zebrasEnabled || peakingEnabled || gridEnabled else { return image }
         let extent = image.extent
         let clear = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0))
             .cropped(to: extent)
@@ -428,6 +431,24 @@ final class CameraController: NSObject, ObservableObject {
             blend.maskImage = edgeMask
             if let peaking = blend.outputImage {
                 out = peaking.composited(over: out)
+            }
+        }
+
+        if gridEnabled {
+            // Grille des tiers : lignes fines alignées sur l'image rendue
+            // (letterbox compris), en surimpression discrète.
+            let lineColor = CIColor(red: 1, green: 1, blue: 1, alpha: 0.4)
+            let thickness = max(1, min(extent.width, extent.height) * 0.0015)
+            for third in 1...2 {
+                let x = extent.minX + extent.width * CGFloat(third) / 3 - thickness / 2
+                let vertical = CGRect(x: x, y: extent.minY,
+                                      width: thickness, height: extent.height)
+                out = CIImage(color: lineColor).cropped(to: vertical).composited(over: out)
+
+                let y = extent.minY + extent.height * CGFloat(third) / 3 - thickness / 2
+                let horizontal = CGRect(x: extent.minX, y: y,
+                                        width: extent.width, height: thickness)
+                out = CIImage(color: lineColor).cropped(to: horizontal).composited(over: out)
             }
         }
 

@@ -49,6 +49,7 @@ struct CameraView: View {
                         histogramToggle
                         zebraToggle
                         peakingToggle
+                        gridToggle
                     }
                     .padding(.horizontal)
                 }
@@ -168,6 +169,25 @@ struct CameraView: View {
                                    : Color.white.opacity(0.15))
                 )
                 .foregroundStyle(camera.peakingEnabled ? .black : .white)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Grille des tiers (viseur uniquement).
+    private var gridToggle: some View {
+        Button {
+            camera.gridEnabled.toggle()
+        } label: {
+            Image(systemName: "grid")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(camera.gridEnabled
+                                   ? Color.orange.opacity(0.9)
+                                   : Color.white.opacity(0.15))
+                )
+                .foregroundStyle(camera.gridEnabled ? .black : .white)
         }
         .buttonStyle(.plain)
     }
