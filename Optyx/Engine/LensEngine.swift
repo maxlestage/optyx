@@ -196,12 +196,22 @@ final class LensEngine {
                                    customMask: CIImage? = nil) -> CIImage {
         let strength = lens.softness * k
         guard strength > 0.02 else { return img }
-        let filter = CIFilter.maskedVariableBlur()
-        filter.inputImage = img.clampedToExtent()
-        filter.mask = customMask ?? radialMask(extent: extent, center: center,
-                                               inner: dim * 0.28, outer: dim * 0.72)
-        filter.radius = Float(dim * 0.012 * strength)
-        return filter.outputImage?.cropped(to: extent) ?? img
+        // Flou gaussien + mélange masqué plutôt que CIMaskedVariableBlur :
+        // ce dernier est le filtre le plus lent de Core Image (échantillonnage
+        // à rayon variable par pixel), alors qu'avec un masque déjà adouci le
+        // fondu net → flou est visuellement identique — pour une fraction
+        // du coût, sur tous les profils.
+        let sigma = dim * 0.006 * strength
+        let blurred = img.clampedToExtent()
+            .applyingGaussianBlur(sigma: sigma)
+            .cropped(to: extent)
+        let mask = customMask ?? radialMask(extent: extent, center: center,
+                                            inner: dim * 0.28, outer: dim * 0.72)
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = blurred
+        blend.backgroundImage = img
+        blend.maskImage = mask
+        return blend.outputImage ?? img
     }
 
     /// Bokeh « bulles de savon » : les hautes lumières sont dilatées en
