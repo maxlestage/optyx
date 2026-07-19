@@ -255,6 +255,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Optyx utilise la caméra pour prévisualiser en temps réel le rendu des objectifs vintage.";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Optyx enregistre le son du micro pendant les vidéos filtrées.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Optyx enregistre dans votre photothèque les images traitées avec le rendu vintage.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -286,6 +287,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Optyx utilise la caméra pour prévisualiser en temps réel le rendu des objectifs vintage.";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Optyx enregistre le son du micro pendant les vidéos filtrées.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Optyx enregistre dans votre photothèque les images traitées avec le rendu vintage.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
