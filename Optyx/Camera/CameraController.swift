@@ -755,7 +755,15 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
                                                                   lens: lens,
                                                                   intensity: intensity,
                                                                   backgroundMask: mask) {
-                    vintageData = rendered.jpegData(compressionQuality: 0.92)
+                    // HEIC avec l'EXIF de la capture, la carte de profondeur
+                    // embarquée et la distance au sujet mesurée.
+                    vintageData = PhotoMetadata.vintageImageData(
+                        rendered: rendered,
+                        originalData: processedData,
+                        depthData: depthData,
+                        lens: lens,
+                        intensity: intensity)
+                        ?? rendered.jpegData(compressionQuality: 0.92)
                 }
             }
             self?.save(vintage: vintageData, raw: rawData)

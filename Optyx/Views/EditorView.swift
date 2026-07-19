@@ -1,4 +1,5 @@
 import CoreImage
+import Photos
 import SwiftUI
 import PhotosUI
 
@@ -18,6 +19,9 @@ struct EditorView: View {
     /// Masque d'arrière-plan extrait de la carte de profondeur (photos Portrait).
     @State private var depthMask: CIImage?
     @State private var useDepth = true
+    /// Données brutes du fichier importé : EXIF et cartes auxiliaires
+    /// (profondeur, matte) à préserver dans l'export.
+    @State private var originalData: Data?
 
     var body: some View {
         NavigationStack {
@@ -157,6 +161,7 @@ struct EditorView: View {
             }.value
             fullResolution = image.normalized(maxDimension: 3200)
             original = image.normalized(maxDimension: 1200)
+            originalData = data
             depthMask = mask
             useDepth = mask != nil
             processed = nil
@@ -196,18 +201,45 @@ struct EditorView: View {
         let lens = self.lens
         let intensity = self.intensity
         let mask = activeMask
+        let sourceData = originalData
         Task.detached(priority: .userInitiated) {
-            let result = LensEngine.shared.renderUIImage(input, lens: lens, intensity: intensity,
-                                                         backgroundMask: mask)
-            await MainActor.run {
-                if let result {
-                    UIImageWriteToSavedPhotosAlbum(result, nil, nil, nil)
-                    savedBanner = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
-                        savedBanner = false
+            // Export avec l'EXIF d'origine et les cartes auxiliaires
+            // (profondeur, matte portrait) recopiées dans le fichier.
+            var exportData: Data?
+            if let result = LensEngine.shared.renderUIImage(input, lens: lens,
+                                                            intensity: intensity,
+                                                            backgroundMask: mask) {
+                exportData = PhotoMetadata.vintageImageData(
+                    rendered: result,
+                    originalData: sourceData,
+                    depthData: nil,
+                    lens: lens,
+                    intensity: intensity)
+                    ?? result.jpegData(compressionQuality: 0.92)
+            }
+            guard let exportData else {
+                await MainActor.run { isSaving = false }
+                return
+            }
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { authStatus in
+                guard authStatus == .authorized || authStatus == .limited else {
+                    DispatchQueue.main.async { isSaving = false }
+                    return
+                }
+                PHPhotoLibrary.shared().performChanges {
+                    PHAssetCreationRequest.forAsset()
+                        .addResource(with: .photo, data: exportData, options: nil)
+                } completionHandler: { success, _ in
+                    DispatchQueue.main.async {
+                        if success {
+                            savedBanner = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                                savedBanner = false
+                            }
+                        }
+                        isSaving = false
                     }
                 }
-                isSaving = false
             }
         }
     }
