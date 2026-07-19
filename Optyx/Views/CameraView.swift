@@ -7,6 +7,8 @@ struct CameraView: View {
     @State private var intensity: Double = 1.0
     /// Zoom au début du pincement en cours.
     @State private var pinchBaseZoom: CGFloat = 1
+    /// Un tap sur l'image masque tous les contrôles (re-tap pour revenir).
+    @State private var hideControls = false
     /// Format de fichier des exports photo (partagé avec le Studio).
     @AppStorage("exportFormat") private var exportFormatRaw = ExportFormat.heic.rawValue
 
@@ -29,6 +31,11 @@ struct CameraView: View {
             case .running, .idle:
                 MetalPreviewView(renderer: camera.previewRenderer)
                     .ignoresSafeArea(edges: .top)
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            hideControls.toggle()
+                        }
+                    }
                 if !camera.hasFrame {
                     ProgressView("Démarrage de la caméra…")
                         .tint(.white)
@@ -46,6 +53,50 @@ struct CameraView: View {
                 )
             }
 
+            if !hideControls {
+                overlayControls(isLandscape: isLandscape)
+            }
+
+            if camera.lastCaptureSaved {
+                Label("Enregistrée dans Photos", systemImage: "checkmark.circle.fill")
+                    .padding(10)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .transition(.opacity)
+            }
+
+            if let countdown = camera.countdown {
+                Text("\(countdown)")
+                    .font(.system(size: 110, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.6), radius: 8)
+                    .transition(.opacity)
+                    .id(countdown)
+            }
+        }
+        .simultaneousGesture(
+            MagnificationGesture()
+                .onChanged { value in
+                    camera.setZoom(pinchBaseZoom * value)
+                }
+                .onEnded { _ in
+                    pinchBaseZoom = camera.zoomFactor
+                }
+        )
+        .animation(.easeInOut(duration: 0.25), value: camera.lastCaptureSaved)
+        .onAppear {
+            camera.lens = lens
+            camera.intensity = intensity
+            camera.start()
+        }
+        .onDisappear { camera.stop() }
+        .onChange(of: lens) { _, newValue in camera.lens = newValue }
+        .onChange(of: intensity) { _, newValue in camera.intensity = newValue }
+    }
+
+    /// Tout l'habillage du viseur (pastilles, histogramme, contrôles),
+    /// masquable d'un tap sur l'image.
+    @ViewBuilder
+    private func overlayControls(isLandscape: Bool) -> some View {
             VStack {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -98,41 +149,6 @@ struct CameraView: View {
                     landscapeSideControls
                 }
             }
-
-            if camera.lastCaptureSaved {
-                Label("Enregistrée dans Photos", systemImage: "checkmark.circle.fill")
-                    .padding(10)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .transition(.opacity)
-            }
-
-            if let countdown = camera.countdown {
-                Text("\(countdown)")
-                    .font(.system(size: 110, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.6), radius: 8)
-                    .transition(.opacity)
-                    .id(countdown)
-            }
-        }
-        .simultaneousGesture(
-            MagnificationGesture()
-                .onChanged { value in
-                    camera.setZoom(pinchBaseZoom * value)
-                }
-                .onEnded { _ in
-                    pinchBaseZoom = camera.zoomFactor
-                }
-        )
-        .animation(.easeInOut(duration: 0.25), value: camera.lastCaptureSaved)
-        .onAppear {
-            camera.lens = lens
-            camera.intensity = intensity
-            camera.start()
-        }
-        .onDisappear { camera.stop() }
-        .onChange(of: lens) { _, newValue in camera.lens = newValue }
-        .onChange(of: intensity) { _, newValue in camera.intensity = newValue }
     }
 
     /// Mode cinéma : capteur calé à 24 images par seconde.

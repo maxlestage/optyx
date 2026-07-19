@@ -13,6 +13,12 @@ final class PreviewRenderer: NSObject, MTKViewDelegate {
     private let context: CIContext?
     private let lock = NSLock()
     private var image: CIImage?
+    /// Génération de la trame présentée : le blit n'est exécuté qu'UNE fois
+    /// par nouvelle trame. Re-blitter à 120 Hz une image dont le buffer
+    /// sous-jacent est réécrit par l'anneau produisait des flashs
+    /// périodiques (scintillement mesuré toutes les ~5 trames caméra).
+    private var generation = 0
+    private var drawnGeneration = -1
 
     override init() {
         let device = MTLCreateSystemDefaultDevice()
@@ -29,6 +35,7 @@ final class PreviewRenderer: NSObject, MTKViewDelegate {
     func present(_ newImage: CIImage) {
         lock.lock()
         image = newImage
+        generation &+= 1
         lock.unlock()
     }
 
@@ -37,7 +44,10 @@ final class PreviewRenderer: NSObject, MTKViewDelegate {
     func draw(in view: MTKView) {
         lock.lock()
         let current = image
+        let currentGeneration = generation
         lock.unlock()
+        // Déjà affichée : le drawable précédent reste à l'écran.
+        guard currentGeneration != drawnGeneration else { return }
         guard let current, let context, let commandQueue,
               !current.extent.isEmpty,
               let drawable = view.currentDrawable,
@@ -63,6 +73,7 @@ final class PreviewRenderer: NSObject, MTKViewDelegate {
                            ?? CGColorSpaceCreateDeviceRGB())
         commandBuffer.present(drawable)
         commandBuffer.commit()
+        drawnGeneration = currentGeneration
     }
 }
 
