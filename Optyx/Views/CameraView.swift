@@ -55,6 +55,28 @@ struct CameraView: View {
 
             if !hideControls {
                 overlayControls(isLandscape: isLandscape)
+            } else {
+                // Petit rappel discret : les contrôles reviennent d'un tap
+                // (sur l'œil ou n'importe où sur l'image).
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                hideControls = false
+                            }
+                        } label: {
+                            Image(systemName: "eye")
+                                .font(.headline)
+                                .padding(12)
+                                .background(.black.opacity(0.4), in: Circle())
+                                .foregroundStyle(.white)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(20)
+                    }
+                }
             }
 
             if camera.lastCaptureSaved {
