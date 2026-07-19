@@ -288,9 +288,9 @@ final class CameraController: NSObject, ObservableObject {
 
     /// Anneau de pixel buffers réutilisables dans lesquels la chaîne de
     /// filtres est rendue une seule fois par trame ; le renderer Metal ne
-    /// fait que les afficher. Cinq buffers en rotation : l'affichage et
-    /// l'encodeur vidéo peuvent en retenir pendant qu'on écrit le suivant.
-    /// Accédé uniquement depuis `videoQueue`.
+    /// fait que les afficher. Huit buffers en rotation (~260 ms de marge) :
+    /// l'affichage et l'encodeur vidéo peuvent en retenir pendant qu'on
+    /// écrit les suivants. Accédé uniquement depuis `videoQueue`.
     private var previewBuffers: [CVPixelBuffer] = []
     private var previewBufferIndex = 0
     private var previewBufferSize = CGSize.zero
@@ -682,7 +682,7 @@ final class CameraController: NSObject, ObservableObject {
                 kCVPixelBufferMetalCompatibilityKey as String: true,
                 kCVPixelBufferIOSurfacePropertiesKey as String: [:],
             ]
-            previewBuffers = (0..<5).compactMap { _ in
+            previewBuffers = (0..<8).compactMap { _ in
                 var buffer: CVPixelBuffer?
                 CVPixelBufferCreate(kCFAllocatorDefault, width, height,
                                     pixelFormat, attributes as CFDictionary,
@@ -739,6 +739,12 @@ final class CameraController: NSObject, ObservableObject {
                         } else {
                             self.cachedDepthRange = fresh
                         }
+                    } else {
+                        // Scène plate ou mesure invalide : on EFFACE la
+                        // plage — une ancienne plage appliquée à une carte
+                        // plate ne ferait qu'amplifier le bruit (masque
+                        // stroboscopique = scintillement des effets).
+                        self.cachedDepthRange = nil
                     }
                     self.depthRangeInFlight = false
                 }

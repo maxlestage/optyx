@@ -27,7 +27,23 @@ struct LensCatalogView: View {
             .navigationDestination(for: LensProfile.self) { lens in
                 LensDetailView(lens: lens)
             }
+            .safeAreaInset(edge: .bottom) {
+                // Numéro de build visible : indispensable pour corréler les
+                // retours TestFlight avec les correctifs embarqués.
+                Text(Self.versionLabel)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.bottom, 4)
+            }
         }
+    }
+}
+
+extension LensCatalogView {
+    static var versionLabel: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "Optyx \(version) — build \(build)"
     }
 }
 
