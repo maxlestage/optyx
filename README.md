@@ -50,6 +50,10 @@ sur vos photos existantes.
 - **Histogramme temps réel** — histogramme RVB superposé dans le viseur,
   calculé sur le **rendu vintage affiché** (pas la scène brute) via
   `CIAreaHistogram` à cadence réduite ; pastille pour le masquer.
+- **Zébras & focus peaking** — pastilles dédiées : hachures diagonales sur
+  les zones surexposées (luminance ≥ 95 %) et surlignage vert des contours
+  nets pour caler la mise au point. Aides affichées dans le viseur
+  uniquement — jamais gravées dans les photos ni les vidéos.
 - **Métadonnées photographe** — la photo vintage est exportée en HEIC avec
   **tout l'EXIF de la capture d'origine** (exposition, ISO, focale réelle,
   GPS…), la **carte de profondeur LiDAR / double objectif embarquée** en

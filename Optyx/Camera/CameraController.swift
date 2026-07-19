@@ -64,6 +64,10 @@ final class CameraController: NSObject, ObservableObject {
     @Published var histogramEnabled = true
     /// Dernier histogramme calculé (sur le rendu vintage, pas la scène brute).
     @Published var histogram: HistogramData?
+    /// Zébras : hachures sur les zones surexposées (viseur uniquement).
+    @Published var zebrasEnabled = false
+    /// Focus peaking : contours nets surlignés en vert (viseur uniquement).
+    @Published var peakingEnabled = false
 
     /// Affichage Metal du viseur : reçoit les trames déjà rendues.
     let previewRenderer = PreviewRenderer()
@@ -340,7 +344,9 @@ final class CameraController: NSObject, ObservableObject {
         LensEngine.shared.context.render(processed, to: buffer,
                                          bounds: processed.extent,
                                          colorSpace: colorSpace)
-        previewRenderer.present(CIImage(cvPixelBuffer: buffer))
+        // Les aides visuelles (zébras, peaking) ne touchent que l'affichage :
+        // le buffer enregistré et les photos restent vierges.
+        previewRenderer.present(assistOverlays(on: CIImage(cvPixelBuffer: buffer)))
 
         // Le même buffer déjà rendu alimente l'enregistrement vidéo :
         // aucun rendu supplémentaire.
@@ -369,6 +375,63 @@ final class CameraController: NSObject, ObservableObject {
                 computeHistogram(from: CIImage(cvPixelBuffer: buffer))
             }
         }
+    }
+
+    /// Aides visuelles du viseur, appliquées par-dessus le rendu déjà écrit :
+    /// zébras (hachures blanches sur les hautes lumières ≥ 95 %) et focus
+    /// peaking (contours nets surlignés en vert). Filtres légers exécutés
+    /// au blit Metal uniquement — jamais dans les fichiers capturés.
+    private func assistOverlays(on image: CIImage) -> CIImage {
+        guard zebrasEnabled || peakingEnabled else { return image }
+        let extent = image.extent
+        let clear = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0))
+            .cropped(to: extent)
+        var out = image
+
+        if zebrasEnabled {
+            let mono = image.applyingFilter("CIColorControls",
+                                            parameters: [kCIInputSaturationKey: 0])
+            let highlights = mono.applyingFilter("CIColorThreshold",
+                                                 parameters: ["inputThreshold": 0.95])
+            let stripesGen = CIFilter.stripesGenerator()
+            stripesGen.center = .zero
+            stripesGen.color0 = CIColor(red: 1, green: 1, blue: 1, alpha: 0.9)
+            stripesGen.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)
+            stripesGen.width = 4
+            stripesGen.sharpness = 1
+            if let stripes = stripesGen.outputImage?
+                .transformed(by: CGAffineTransform(rotationAngle: .pi / 4))
+                .cropped(to: extent) {
+                let blend = CIFilter.blendWithMask()
+                blend.inputImage = stripes
+                blend.backgroundImage = clear
+                blend.maskImage = highlights
+                if let zebra = blend.outputImage {
+                    out = zebra.composited(over: out)
+                }
+            }
+        }
+
+        if peakingEnabled {
+            let edges = image.applyingFilter("CIEdges",
+                                             parameters: [kCIInputIntensityKey: 4])
+            let edgeMask = edges
+                .applyingFilter("CIColorControls",
+                                parameters: [kCIInputSaturationKey: 0])
+                .applyingFilter("CIColorThreshold",
+                                parameters: ["inputThreshold": 0.3])
+            let green = CIImage(color: CIColor(red: 0.25, green: 1, blue: 0.3, alpha: 0.85))
+                .cropped(to: extent)
+            let blend = CIFilter.blendWithMask()
+            blend.inputImage = green
+            blend.backgroundImage = clear
+            blend.maskImage = edgeMask
+            if let peaking = blend.outputImage {
+                out = peaking.composited(over: out)
+            }
+        }
+
+        return out
     }
 
     /// Histogramme RVB via CIAreaHistogram (64 bins), normalisé par canal
