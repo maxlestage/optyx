@@ -114,7 +114,17 @@ final class LensEngine {
         guard strength > 0.02 else { return img }
 
         let clamped = img.clampedToExtent()
-        let offsets: [Double] = [-1.0, -0.6, -0.2, 0.2, 0.6, 1.0]
+        // Échantillonnage adaptatif : un tourbillon discret est visuellement
+        // identique avec 2 rotations qu'avec 6 — inutile de payer le coût
+        // plein pour un effet à peine perceptible (profils « ciné »).
+        let offsets: [Double]
+        if strength < 0.15 {
+            offsets = [-1.0, 1.0]
+        } else if strength < 0.4 {
+            offsets = [-1.0, -0.33, 0.33, 1.0]
+        } else {
+            offsets = [-1.0, -0.6, -0.2, 0.2, 0.6, 1.0]
+        }
         let weight = CGFloat(1.0 / Double(offsets.count))
 
         /// Copie tourbillonnée pour une amplitude donnée (1 = nominale).
@@ -145,6 +155,17 @@ final class LensEngine {
         }
 
         if let customMask {
+            // Tourbillon discret : la graduation par bande serait invisible,
+            // une seule couche masquée par la profondeur suffit (÷3 le coût).
+            if strength < 0.2 {
+                guard let layer = swirledLayer(amplitude: 1.0) else { return img }
+                let blend = CIFilter.blendWithMask()
+                blend.inputImage = layer
+                blend.backgroundImage = img
+                blend.maskImage = customMask
+                return blend.outputImage ?? img
+            }
+
             // Tourbillon gradué : chaque bande de distance reçoit une
             // amplitude croissante, le sujet reste intact.
             var out = img
@@ -191,7 +212,10 @@ final class LensEngine {
                                   extent: CGRect, dim: CGFloat,
                                   customMask: CIImage? = nil) -> CIImage {
         let strength = lens.bubble * k
-        guard strength > 0.02 else { return img }
+        // Sous 10 %, les anneaux (incrustés à 0,75 × strength) sont
+        // invisibles à l'écran alors que la morphologie coûte cher :
+        // autant ne rien faire.
+        guard strength > 0.1 else { return img }
 
         let mono = CIFilter.colorControls()
         mono.inputImage = img
@@ -226,6 +250,18 @@ final class LensEngine {
         guard let customMask else {
             // Sans profondeur : une seule taille de bulles, partout.
             guard let rings = ringLayer(discRadius: baseRadius) else { return img }
+            let screen = CIFilter.screenBlendMode()
+            screen.inputImage = rings
+            screen.backgroundImage = img
+            return screen.outputImage ?? img
+        }
+
+        // Bulles discrètes : la variation de diamètre par bande ne se voit
+        // pas, une seule couche pondérée par la profondeur suffit
+        // (1 chaîne de morphologie au lieu de 3).
+        if strength < 0.35 {
+            guard var rings = ringLayer(discRadius: baseRadius) else { return img }
+            rings = multiplied(rings, customMask).cropped(to: extent)
             let screen = CIFilter.screenBlendMode()
             screen.inputImage = rings
             screen.backgroundImage = img
@@ -315,6 +351,18 @@ final class LensEngine {
         }
 
         if let customMask {
+            // Franges discrètes : la graduation par distance est
+            // imperceptible, une seule couche masquée suffit
+            // (1 découpe de canaux au lieu de 3).
+            if strength < 0.3 {
+                guard let layer = aberrated(delta: baseDelta) else { return img }
+                let blend = CIFilter.blendWithMask()
+                blend.inputImage = layer
+                blend.backgroundImage = img
+                blend.maskImage = customMask
+                return blend.outputImage ?? img
+            }
+
             // Le mélange pondéré de deux images décalées créerait un
             // dédoublement ; chaque bande reçoit donc sa propre couche
             // au décalage réellement mis à l'échelle.

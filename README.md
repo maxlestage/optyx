@@ -137,6 +137,12 @@ défaut caractéristique, dosé par le profil de l'objectif :
 - **Voile vintage** — noirs levés, contraste et saturation réduits.
 - **Douceur de bords, grain** — filtres dédiés dosés par profil.
 
+Le coût GPU de chaque effet **suit son intensité** : un effet discret est
+rendu avec moins d'échantillons (2 rotations de tourbillon au lieu de 6,
+une seule couche de bulles ou d'aberration au lieu de trois bandes de
+distance) — visuellement identique, mais les profils « toutes options à
+faible dose » comme l'Angénieux Cinéma gardent la pleine cadence du viseur.
+
 ## Lancer le projet
 
 1. Ouvrir `Optyx.xcodeproj` dans **Xcode 16+**.
