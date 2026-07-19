@@ -35,20 +35,25 @@ final class LensEngine {
         let dim = min(extent.width, extent.height)
         let center = CGPoint(x: extent.midX, y: extent.midY)
         let depthMask = backgroundMask.map { fitMask($0, to: extent) }
+        // Bandes de distance calculées UNE fois par trame et partagées :
+        // chaque effet gradué qui recalculait les siennes produisait des
+        // sous-graphes identiques mais distincts, que Core Image ne peut
+        // pas fusionner — travail triplé pour rien.
+        let bands = depthMask.map { depthBands($0) }
         var img = input
 
         img = applyTone(img, lens: lens, k: k)
         img = applyWarmth(img, lens: lens, k: k)
         img = applySwirl(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
-                         customMask: depthMask)
+                         customMask: depthMask, bands: bands)
         img = applyEdgeSoftness(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
                                 customMask: depthMask)
         img = applyBubbleBokeh(img, lens: lens, k: k, extent: extent, dim: dim,
-                               customMask: depthMask)
+                               customMask: depthMask, bands: bands)
         img = applyGlow(img, lens: lens, k: k, dim: dim, extent: extent,
                         customMask: depthMask)
         img = applyChromaticAberration(img, lens: lens, k: k, extent: extent, center: center,
-                                       customMask: depthMask)
+                                       customMask: depthMask, bands: bands)
         img = applyVignette(img, lens: lens, k: k, center: center, dim: dim,
                             extent: extent, customMask: depthMask)
         img = applyGrain(img, lens: lens, k: k, extent: extent)
@@ -109,7 +114,8 @@ final class LensEngine {
     /// la distance au plan de netteté.
     private func applySwirl(_ img: CIImage, lens: LensProfile, k: Double,
                             extent: CGRect, center: CGPoint, dim: CGFloat,
-                            customMask: CIImage? = nil) -> CIImage {
+                            customMask: CIImage? = nil,
+                            bands: [(factor: Double, weight: CIImage)]? = nil) -> CIImage {
         let strength = lens.swirl * k
         guard strength > 0.02 else { return img }
 
@@ -169,7 +175,7 @@ final class LensEngine {
             // Tourbillon gradué : chaque bande de distance reçoit une
             // amplitude croissante, le sujet reste intact.
             var out = img
-            for band in depthBands(customMask) {
+            for band in bands ?? depthBands(customMask) {
                 guard let layer = swirledLayer(amplitude: band.factor) else { continue }
                 let blend = CIFilter.blendWithMask()
                 blend.inputImage = layer
@@ -220,7 +226,8 @@ final class LensEngine {
     /// distance au plan de netteté, comme sur un vrai objectif.
     private func applyBubbleBokeh(_ img: CIImage, lens: LensProfile, k: Double,
                                   extent: CGRect, dim: CGFloat,
-                                  customMask: CIImage? = nil) -> CIImage {
+                                  customMask: CIImage? = nil,
+                                  bands: [(factor: Double, weight: CIImage)]? = nil) -> CIImage {
         let strength = lens.bubble * k
         // Sous 10 %, les anneaux (incrustés à 0,75 × strength) sont
         // invisibles à l'écran alors que la morphologie coûte cher :
@@ -281,7 +288,7 @@ final class LensEngine {
         // Couches de bulles réparties sur les bandes de distance partagées :
         // proches du plan de netteté → petites, lointaines → larges.
         var out = img
-        for band in depthBands(customMask) {
+        for band in bands ?? depthBands(customMask) {
             guard var rings = ringLayer(discRadius: max(3, baseRadius * Float(band.factor)))
             else { continue }
             rings = multiplied(rings, band.weight).cropped(to: extent)
@@ -321,7 +328,8 @@ final class LensEngine {
     /// réellement avec la distance au plan de netteté.
     private func applyChromaticAberration(_ img: CIImage, lens: LensProfile, k: Double,
                                           extent: CGRect, center: CGPoint,
-                                          customMask: CIImage? = nil) -> CIImage {
+                                          customMask: CIImage? = nil,
+                                          bands: [(factor: Double, weight: CIImage)]? = nil) -> CIImage {
         let strength = lens.chroma * k
         guard strength > 0.02 else { return img }
         let baseDelta = 0.0035 * strength
@@ -377,7 +385,7 @@ final class LensEngine {
             // dédoublement ; chaque bande reçoit donc sa propre couche
             // au décalage réellement mis à l'échelle.
             var out = img
-            for band in depthBands(customMask) {
+            for band in bands ?? depthBands(customMask) {
                 guard let layer = aberrated(delta: baseDelta * band.factor) else { continue }
                 let blend = CIFilter.blendWithMask()
                 blend.inputImage = layer
