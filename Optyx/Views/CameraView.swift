@@ -52,6 +52,7 @@ struct CameraView: View {
                         if camera.mode == .video { letterboxToggle }
                         if camera.depthAvailable { depthToggle }
                         timerToggle
+                        if camera.mode == .photo { burstToggle }
                         if camera.mode == .photo { formatMenu }
                         if camera.mode == .photo { fileFormatMenu }
                         if camera.rawSupported && camera.mode == .photo { rawToggle }
@@ -244,6 +245,35 @@ struct CameraView: View {
                 .foregroundStyle(camera.photoFormat != .fourThree ? .black : .white)
         }
         .buttonStyle(.plain)
+    }
+
+    /// Mode rafale : le déclencheur enchaîne 8 captures pleine qualité ;
+    /// pendant la rafale, la pastille affiche le compteur.
+    private var burstToggle: some View {
+        Button {
+            camera.burstEnabled.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "square.stack.3d.down.right.fill")
+                if camera.burstCountRemaining > 0 {
+                    Text("\(camera.burstCountRemaining)")
+                        .monospacedDigit()
+                } else if camera.burstEnabled {
+                    Text("×\(camera.burstSize)")
+                }
+            }
+            .font(.caption.weight(.bold))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule().fill(camera.burstEnabled
+                               ? Color.orange.opacity(0.9)
+                               : Color.white.opacity(0.15))
+            )
+            .foregroundStyle(camera.burstEnabled ? .black : .white)
+        }
+        .buttonStyle(.plain)
+        .disabled(camera.burstCountRemaining > 0)
     }
 
     /// Format de fichier des exports : HEIC, JPEG, PNG ou TIFF.
