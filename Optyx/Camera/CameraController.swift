@@ -727,18 +727,34 @@ final class CameraController: NSObject, ObservableObject {
            !depthRangeInFlight {
             // Mesure min/max sur la file d'analyse : la plage d'une scène
             // évolue lentement, une valeur en léger différé suffit.
+            // Hystérésis : seuil d'acquisition haut (0.035), seuil de
+            // maintien bas (0.015). Sans elle, une scène dont le relief
+            // oscille autour d'un seuil unique faisait apparaître puis
+            // disparaître le masque à chaque mesure — tous les effets
+            // gradués clignotaient toutes les ~5 trames.
             depthRangeInFlight = true
+            let minSpan: Float = cachedDepthRange == nil ? 0.035 : 0.015
             analysisQueue.async { [weak self] in
                 guard let self else { return }
-                let fresh = DepthExtractor.range(of: map, context: self.analysisContext)
+                let fresh = DepthExtractor.range(of: map, context: self.analysisContext,
+                                                 minSpan: minSpan)
                 self.videoQueue.async {
                     if let fresh {
-                        // Lissage exponentiel : la normalisation évolue en
-                        // douceur, aucun saut visible entre deux mesures.
                         if let old = self.cachedDepthRange {
-                            self.cachedDepthRange = DepthExtractor.DepthRange(
-                                min: old.min + (fresh.min - old.min) * 0.3,
-                                max: old.max + (fresh.max - old.max) * 0.3)
+                            // Zone morte : une mesure qui ne bouge que dans
+                            // le bruit (< 10 % de la plage) ne change RIEN —
+                            // masque parfaitement immobile sur une scène
+                            // statique. Au-delà, lissage exponentiel.
+                            let span = max(old.max - old.min, 0.001)
+                            let deadband = span * 0.1
+                            if abs(fresh.min - old.min) < deadband,
+                               abs(fresh.max - old.max) < deadband {
+                                // Plage conservée telle quelle.
+                            } else {
+                                self.cachedDepthRange = DepthExtractor.DepthRange(
+                                    min: old.min + (fresh.min - old.min) * 0.3,
+                                    max: old.max + (fresh.max - old.max) * 0.3)
+                            }
                         } else {
                             self.cachedDepthRange = fresh
                         }

@@ -51,12 +51,22 @@ enum DepthExtractor {
     /// périodiquement et l'exécute sur sa file d'analyse avec un contexte
     /// dédié pour ne pas bloquer le chemin des trames.
     static func range(of map: CIImage,
-                      context: CIContext = LensEngine.shared.context) -> DepthRange? {
+                      context: CIContext = LensEngine.shared.context,
+                      minSpan: Float = 0.02) -> DepthRange? {
         guard !map.extent.isEmpty, !map.extent.isInfinite else { return nil }
 
+        // Min/max est une statistique d'extrêmes : un seul pixel aberrant
+        // (reflet spéculaire, bord de sujet) déplace la mesure d'une trame
+        // à l'autre et fait pulser la normalisation du masque. Un très
+        // léger flou écrase ces pixels isolés — plage stable sur une
+        // scène statique, sans changer l'échelle générale.
+        let measured = map.clampedToExtent()
+            .applyingGaussianBlur(sigma: 2)
+            .cropped(to: map.extent)
+
         let minMax = CIFilter(name: "CIAreaMinMax", parameters: [
-            kCIInputImageKey: map,
-            kCIInputExtentKey: CIVector(cgRect: map.extent),
+            kCIInputImageKey: measured,
+            kCIInputExtentKey: CIVector(cgRect: measured.extent),
         ])
         guard let minMaxImage = minMax?.outputImage else { return nil }
 
@@ -73,7 +83,11 @@ enum DepthExtractor {
         // Plage trop étroite (scène plate, mur uni) : la normalisation ne
         // ferait qu'amplifier le bruit du capteur — masque instable qui
         // fait scintiller les effets. Mieux vaut pas de masque du tout.
-        guard maxValue - minValue > 0.02 else { return nil }
+        // `minSpan` est fourni par l'appelant : la caméra applique une
+        // hystérésis (seuil d'acquisition haut, seuil de maintien bas)
+        // pour qu'une scène à la limite ne fasse pas apparaître et
+        // disparaître le masque en boucle.
+        guard maxValue - minValue > minSpan else { return nil }
         return DepthRange(min: minValue, max: maxValue)
     }
 
