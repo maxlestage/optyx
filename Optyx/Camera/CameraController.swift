@@ -161,6 +161,15 @@ final class CameraController: NSObject, ObservableObject {
     /// File série des développements photo : borne la mémoire pendant
     /// une rafale (un rendu pleine résolution à la fois).
     private let renderQueue = DispatchQueue(label: "optyx.camera.render", qos: .userInitiated)
+    /// File d'analyse (histogramme, plage de profondeur) avec son propre
+    /// contexte Core Image : les lectures GPU→CPU s'y font hors du chemin
+    /// des trames — une lecture synchrone sur `videoQueue` gelait le viseur
+    /// une trame sur trois (saccades mesurées à 60-130 ms).
+    private let analysisQueue = DispatchQueue(label: "optyx.camera.analysis", qos: .utility)
+    private let analysisContext = CIContext(options: [.cacheIntermediates: false])
+    /// Analyses en cours, pour ne pas empiler (confinés à `videoQueue`).
+    private var histogramInFlight = false
+    private var depthRangeInFlight = false
     private let videoOutput = AVCaptureVideoDataOutput()
     private let depthOutput = AVCaptureDepthDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
@@ -523,11 +532,17 @@ final class CameraController: NSObject, ObservableObject {
         }
 
         // Histogramme du rendu affiché (buffer déjà rendu : aucun filtre
-        // re-exécuté), à cadence réduite.
+        // re-exécuté), calculé sur la file d'analyse pour ne jamais
+        // bloquer les trames.
         if histogramEnabled {
             histogramFrameCounter += 1
-            if histogramFrameCounter % histogramInterval == 0 {
-                computeHistogram(from: CIImage(cvPixelBuffer: buffer))
+            if histogramFrameCounter % histogramInterval == 0, !histogramInFlight {
+                histogramInFlight = true
+                let image = CIImage(cvPixelBuffer: buffer)
+                analysisQueue.async { [weak self] in
+                    self?.computeHistogram(from: image)
+                    self?.videoQueue.async { self?.histogramInFlight = false }
+                }
             }
         }
     }
@@ -619,13 +634,13 @@ final class CameraController: NSObject, ObservableObject {
         guard let output = filter.outputImage else { return }
 
         var values = [Float](repeating: 0, count: histogramBins * 4)
-        LensEngine.shared.context.render(output,
-                                         toBitmap: &values,
-                                         rowBytes: histogramBins * 16,
-                                         bounds: CGRect(x: 0, y: 0,
-                                                        width: histogramBins, height: 1),
-                                         format: .RGBAf,
-                                         colorSpace: nil)
+        analysisContext.render(output,
+                               toBitmap: &values,
+                               rowBytes: histogramBins * 16,
+                               bounds: CGRect(x: 0, y: 0,
+                                              width: histogramBins, height: 1),
+                               format: .RGBAf,
+                               colorSpace: nil)
 
         var red = [Float](repeating: 0, count: histogramBins)
         var green = red
@@ -705,9 +720,18 @@ final class CameraController: NSObject, ObservableObject {
 
         depthFrameCounter += 1
         if cachedDepthRange == nil
-            || depthFrameCounter % depthRangeRefreshInterval == 1 {
-            if let fresh = DepthExtractor.range(of: map) {
-                cachedDepthRange = fresh
+            || depthFrameCounter % depthRangeRefreshInterval == 1,
+           !depthRangeInFlight {
+            // Mesure min/max sur la file d'analyse : la plage d'une scène
+            // évolue lentement, une valeur en léger différé suffit.
+            depthRangeInFlight = true
+            analysisQueue.async { [weak self] in
+                guard let self else { return }
+                let fresh = DepthExtractor.range(of: map, context: self.analysisContext)
+                self.videoQueue.async {
+                    if let fresh { self.cachedDepthRange = fresh }
+                    self.depthRangeInFlight = false
+                }
             }
         }
         guard let range = cachedDepthRange else { return nil }
