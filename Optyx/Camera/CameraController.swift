@@ -28,6 +28,37 @@ final class CameraController: NSObject, ObservableObject {
         let blue: [Float]
     }
 
+    /// Formats de cadrage photo, hérités des grands classiques argentiques.
+    enum PhotoFormat: String, CaseIterable {
+        case fourThree = "4:3"
+        case threeTwo = "3:2"
+        case oneOne = "1:1"
+        case sixteenNine = "16:9"
+        case xpan = "65:24"
+
+        /// Rapport grand côté / petit côté (nil = format natif du capteur).
+        var longOverShort: CGFloat? {
+            switch self {
+            case .fourThree: return nil
+            case .threeTwo: return 3.0 / 2.0
+            case .oneOne: return 1
+            case .sixteenNine: return 16.0 / 9.0
+            case .xpan: return 65.0 / 24.0
+            }
+        }
+
+        /// Libellé du menu, avec l'héritage argentique du format.
+        var title: String {
+            switch self {
+            case .fourThree: return "4:3 · natif"
+            case .threeTwo: return "3:2 · film 135"
+            case .oneOne: return "1:1 · 6×6"
+            case .sixteenNine: return "16:9"
+            case .xpan: return "65:24 · XPan"
+            }
+        }
+    }
+
     @Published var status: Status = .idle
     @Published var lastCaptureSaved = false
     /// Passe à vrai dès que la première trame filtrée est affichée.
@@ -40,7 +71,13 @@ final class CameraController: NSObject, ObservableObject {
             updateLetterbox()
             updateFourK()
             updateHDR()
+            updatePhotoFormat()
         }
+    }
+
+    /// Format de cadrage photo (recadrage centré appliqué avant les filtres).
+    @Published var photoFormat: PhotoFormat = .fourThree {
+        didSet { updatePhotoFormat() }
     }
     @Published var isRecording = false
     @Published var recordingSeconds = 0
@@ -128,6 +165,8 @@ final class CameraController: NSObject, ObservableObject {
     private let letterboxRatio: CGFloat = 2.39
     /// Miroir de `fourKEnabled && mode == .video` côté `videoQueue`.
     private var fourKActive = false
+    /// Miroir du format photo côté `videoQueue` (nil = natif ou mode vidéo).
+    private var photoFormatRatio: CGFloat?
     /// Miroir de `hdrEnabled && mode == .video` côté `videoQueue`.
     private var hdrActive = false
     /// Format 10 bits du pool en cours (pour le recréer au changement).
@@ -318,6 +357,15 @@ final class CameraController: NSObject, ObservableObject {
         if largest > processingMaxDimension {
             let scale = processingMaxDimension / largest
             image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        }
+
+        // Format photo : recadrage centré AVANT les filtres, pour que le
+        // vignettage et les masques radiaux épousent le cadre choisi.
+        // Le masque de profondeur subit le même recadrage pour rester aligné.
+        var depthMask = depthMask
+        if let ratio = photoFormatRatio {
+            image = Self.centerCrop(image, longOverShort: ratio)
+            depthMask = depthMask.map { Self.centerCrop($0, longOverShort: ratio) }
         }
 
         var processed = LensEngine.shared.render(image, lens: lens, intensity: intensity,
@@ -623,6 +671,33 @@ final class CameraController: NSObject, ObservableObject {
         }
     }
 
+    private func updatePhotoFormat() {
+        let ratio = mode == .photo ? photoFormat.longOverShort : nil
+        videoQueue.async { [weak self] in
+            self?.photoFormatRatio = ratio
+        }
+    }
+
+    /// Recadrage centré au rapport grand côté / petit côté donné,
+    /// valable en portrait comme en paysage.
+    private static func centerCrop(_ image: CIImage, longOverShort ratio: CGFloat) -> CIImage {
+        let extent = image.extent
+        guard ratio >= 1, !extent.isEmpty else { return image }
+        let width: CGFloat
+        let height: CGFloat
+        if extent.height >= extent.width {
+            width = min(extent.width, extent.height / ratio)
+            height = min(extent.height, extent.width * ratio)
+        } else {
+            width = min(extent.width, extent.height * ratio)
+            height = min(extent.height, extent.width / ratio)
+        }
+        return image.cropped(to: CGRect(x: extent.midX - width / 2,
+                                        y: extent.midY - height / 2,
+                                        width: width,
+                                        height: height))
+    }
+
     /// Bascule le mode 4K + stabilisation cinématique (verrouillé pendant
     /// un enregistrement : les dimensions ne peuvent pas changer en cours
     /// de fichier).
@@ -888,17 +963,23 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
         let lens = self.lens
         let intensity = self.intensity
         let orientation = self.sensorOrientation
+        let formatRatio = mode == .photo ? photoFormat.longOverShort : nil
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             // Le rendu vintage est "développé" à partir de la version traitée ;
             // le DNG reste, par définition, les données brutes du capteur.
             var vintageData: Data?
             if let processedData, let source = UIImage(data: processedData) {
-                let mask = depthData.flatMap {
+                var mask = depthData.flatMap {
                     Self.backgroundMask(from: $0, orientation: orientation)
                 }
                 let normalized = source.normalized(maxDimension: 3200)
-                if let ciImage = CIImage(image: normalized),
+                var ciImage = CIImage(image: normalized)
+                if let ratio = formatRatio {
+                    ciImage = ciImage.map { Self.centerCrop($0, longOverShort: ratio) }
+                    mask = mask.map { Self.centerCrop($0, longOverShort: ratio) }
+                }
+                if let ciImage,
                    let rendered = LensEngine.shared.renderUIImage(ciImage,
                                                                   lens: lens,
                                                                   intensity: intensity,

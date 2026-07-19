@@ -47,6 +47,12 @@ sur vos photos existantes.
   (TrueDepth : la profondeur reste disponible en selfie), **zoom par
   pincement** (pastille tap-pour-revenir-à-1×), verrouillage
   **AE/AF** (exposition + mise au point).
+- **Formats photo** — menu de cadrage dans le viseur : **4:3** natif,
+  **3:2** (film 135), **1:1** (6×6 moyen format), **16:9** et **65:24**
+  (panoramique XPan). Recadrage centré appliqué **avant** la chaîne de
+  filtres — le vignettage et les masques épousent le cadre choisi — et
+  visible en direct ; le masque de profondeur est recadré à l'identique.
+  En mode RAW, le DNG conserve le plein cadre du capteur.
 - **Histogramme temps réel** — histogramme RVB superposé dans le viseur,
   calculé sur le **rendu vintage affiché** (pas la scène brute) via
   `CIAreaHistogram` à cadence réduite ; pastille pour le masquer.
