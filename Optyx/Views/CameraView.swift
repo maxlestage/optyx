@@ -45,6 +45,7 @@ struct CameraView: View {
                         if camera.mode == .video { cineToggle }
                         if camera.mode == .video { letterboxToggle }
                         if camera.depthAvailable { depthToggle }
+                        if camera.mode == .photo { formatMenu }
                         if camera.rawSupported && camera.mode == .photo { rawToggle }
                         histogramToggle
                         zebraToggle
@@ -169,6 +170,36 @@ struct CameraView: View {
                                    : Color.white.opacity(0.15))
                 )
                 .foregroundStyle(camera.peakingEnabled ? .black : .white)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Formats de cadrage photo : 4:3 natif, 3:2 film 135, 1:1 (6×6),
+    /// 16:9 et 65:24 (XPan).
+    private var formatMenu: some View {
+        Menu {
+            ForEach(CameraController.PhotoFormat.allCases, id: \.self) { format in
+                Button {
+                    camera.photoFormat = format
+                } label: {
+                    if camera.photoFormat == format {
+                        Label(format.title, systemImage: "checkmark")
+                    } else {
+                        Text(format.title)
+                    }
+                }
+            }
+        } label: {
+            Text(camera.photoFormat.rawValue)
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(camera.photoFormat != .fourThree
+                                   ? Color.orange.opacity(0.9)
+                                   : Color.white.opacity(0.15))
+                )
+                .foregroundStyle(camera.photoFormat != .fourThree ? .black : .white)
         }
         .buttonStyle(.plain)
     }
