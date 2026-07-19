@@ -343,6 +343,9 @@ final class CameraController: NSObject, ObservableObject {
             if !self.session.isRunning { self.session.startRunning() }
             // Stéréo quand le matériel le permet (sinon reste en mono).
             try? AVAudioSession.sharedInstance().setPreferredInputNumberOfChannels(2)
+            // Applique dès le démarrage le plancher de cadence du viseur
+            // (30 i/s) — pas seulement aux changements de mode/caméra.
+            self.updateFrameRate()
             DispatchQueue.main.async { self.status = .running }
         }
     }
@@ -1036,15 +1039,25 @@ final class CameraController: NSObject, ObservableObject {
                   (try? device.lockForConfiguration()) != nil else { return }
             defer { device.unlockForConfiguration() }
 
-            let supports24 = device.activeFormat.videoSupportedFrameRateRanges
-                .contains { $0.minFrameRate <= 24 && 24 <= $0.maxFrameRate }
+            let ranges = device.activeFormat.videoSupportedFrameRateRanges
+            let supports24 = ranges.contains { $0.minFrameRate <= 24 && 24 <= $0.maxFrameRate }
             if use24 && supports24 {
                 let frameDuration = CMTime(value: 1, timescale: 24)
                 device.activeVideoMinFrameDuration = frameDuration
                 device.activeVideoMaxFrameDuration = frameDuration
             } else {
                 device.activeVideoMinFrameDuration = .invalid
-                device.activeVideoMaxFrameDuration = .invalid
+                // Sans borne, l'exposition automatique allonge le temps de
+                // pose en basse lumière et fait tomber le capteur à
+                // ~15-20 i/s : viseur saccadé (intervalle de trame en dents
+                // de scie) alors que le GPU est quasi inactif. On verrouille
+                // le plancher à 30 i/s — l'exposition compense à l'ISO,
+                // comme l'app Appareil photo d'Apple.
+                if ranges.contains(where: { $0.minFrameRate <= 30 && 30 <= $0.maxFrameRate }) {
+                    device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 30)
+                } else {
+                    device.activeVideoMaxFrameDuration = .invalid
+                }
             }
         }
     }
