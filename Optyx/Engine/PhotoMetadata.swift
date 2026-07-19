@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreVideo
 import ImageIO
 import UIKit
 import UniformTypeIdentifiers
