@@ -58,7 +58,9 @@ final class PreviewRenderer: NSObject, MTKViewDelegate {
             .composited(over: CIImage(color: .black).cropped(to: bounds))
 
         context.render(composed, to: drawable.texture, commandBuffer: commandBuffer,
-                       bounds: bounds, colorSpace: CGColorSpaceCreateDeviceRGB())
+                       bounds: bounds,
+                       colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
+                           ?? CGColorSpaceCreateDeviceRGB())
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }

@@ -43,6 +43,11 @@ sur vos photos existantes.
   réservé au pipeline de capture natif d'Apple). Audio AAC **stéréo
   48 kHz 192 kbit/s** quand le matériel le permet, débit vidéo explicite
   (~0,15 bit/pixel/s, majoré en HDR).
+- **Toutes les orientations** — l'app suit la rotation du téléphone
+  (portrait, paysage, retourné) : viseur, profondeur, photos et vidéos
+  s'orientent correctement ; l'orientation est verrouillée pendant un
+  enregistrement vidéo (les dimensions du fichier ne peuvent pas changer
+  en cours de route).
 - **Contrôles de prise de vue** — bascule caméra arrière ↔ frontale
   (TrueDepth : la profondeur reste disponible en selfie), **zoom par
   pincement** (pastille tap-pour-revenir-à-1×), verrouillage
