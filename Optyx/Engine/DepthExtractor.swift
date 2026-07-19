@@ -47,9 +47,11 @@ enum DepthExtractor {
     }
 
     /// Mesure le min/max de la carte — seule étape avec un aller-retour
-    /// GPU→CPU. La caméra la met en cache et ne la rafraîchit que
-    /// périodiquement, la plage d'une scène évoluant lentement.
-    static func range(of map: CIImage) -> DepthRange? {
+    /// GPU→CPU. La caméra la met en cache, ne la rafraîchit que
+    /// périodiquement et l'exécute sur sa file d'analyse avec un contexte
+    /// dédié pour ne pas bloquer le chemin des trames.
+    static func range(of map: CIImage,
+                      context: CIContext = LensEngine.shared.context) -> DepthRange? {
         guard !map.extent.isEmpty, !map.extent.isInfinite else { return nil }
 
         let minMax = CIFilter(name: "CIAreaMinMax", parameters: [
@@ -60,12 +62,12 @@ enum DepthExtractor {
 
         // Le filtre renvoie une image 2×1 : pixel 0 = minimum, pixel 1 = maximum.
         var pixels = [Float](repeating: 0, count: 8)
-        LensEngine.shared.context.render(minMaxImage,
-                                         toBitmap: &pixels,
-                                         rowBytes: 32,
-                                         bounds: CGRect(x: 0, y: 0, width: 2, height: 1),
-                                         format: .RGBAf,
-                                         colorSpace: nil)
+        context.render(minMaxImage,
+                       toBitmap: &pixels,
+                       rowBytes: 32,
+                       bounds: CGRect(x: 0, y: 0, width: 2, height: 1),
+                       format: .RGBAf,
+                       colorSpace: nil)
         let minValue = pixels[0]
         let maxValue = pixels[4]
         guard maxValue - minValue > 0.0001 else { return nil }

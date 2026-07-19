@@ -75,7 +75,10 @@ struct MetalPreviewView: UIViewRepresentable {
         view.delegate = renderer
         view.framebufferOnly = false
         view.colorPixelFormat = .bgra8Unorm
-        view.preferredFramesPerSecond = 30
+        // 120 Hz : le blit est quasi gratuit, et une boucle d'affichage à
+        // 30 Hz non synchronisée avec l'arrivée des trames caméra ajoutait
+        // jusqu'à 33 ms de gigue de présentation (saccades perçues).
+        view.preferredFramesPerSecond = 120
         view.backgroundColor = .black
         return view
     }

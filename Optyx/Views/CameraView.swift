@@ -15,6 +15,13 @@ struct CameraView: View {
     }
 
     var body: some View {
+        GeometryReader { geo in
+            let isLandscape = geo.size.width > geo.size.height
+            content(isLandscape: isLandscape)
+        }
+    }
+
+    private func content(isLandscape: Bool) -> some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
@@ -76,7 +83,20 @@ struct CameraView: View {
                 }
 
                 Spacer()
-                controls
+                if !isLandscape { controls }
+            }
+
+            // En paysage : image dégagée, réglages dans une barre fine en
+            // bas et déclencheur sur le bord droit, sous le pouce.
+            if isLandscape {
+                VStack {
+                    Spacer()
+                    landscapeBottomBar
+                }
+                HStack {
+                    Spacer()
+                    landscapeSideControls
+                }
             }
 
             if camera.lastCaptureSaved {
@@ -519,28 +539,63 @@ struct CameraView: View {
                 modeButton("Vidéo", .video)
             }
 
-            Button {
-                camera.triggerShutter()
-            } label: {
-                ZStack {
-                    Circle().stroke(.white, lineWidth: 4).frame(width: 72, height: 72)
-                    if camera.mode == .photo {
-                        Circle().fill(.white).frame(width: 58, height: 58)
-                    } else if camera.isRecording {
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(.red)
-                            .frame(width: 30, height: 30)
-                    } else {
-                        Circle().fill(.red).frame(width: 58, height: 58)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            .disabled(camera.status != .running)
-            .padding(.bottom, 6)
+            shutterButton
+                .padding(.bottom, 6)
         }
         .padding(.vertical, 12)
         .background(.black.opacity(0.35))
+    }
+
+    private var shutterButton: some View {
+        Button {
+            camera.triggerShutter()
+        } label: {
+            ZStack {
+                Circle().stroke(.white, lineWidth: 4).frame(width: 72, height: 72)
+                if camera.mode == .photo {
+                    Circle().fill(.white).frame(width: 58, height: 58)
+                } else if camera.isRecording {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(.red)
+                        .frame(width: 30, height: 30)
+                } else {
+                    Circle().fill(.red).frame(width: 58, height: 58)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(camera.status != .running)
+    }
+
+    /// Paysage : barre fine en bas — objectifs et intensité seulement.
+    private var landscapeBottomBar: some View {
+        HStack(spacing: 12) {
+            LensChipBar(selected: $lens)
+                .frame(maxWidth: .infinity)
+            Slider(value: $intensity, in: 0...1)
+                .tint(.orange)
+                .frame(width: 170)
+            Text("\(Int(intensity * 100)) %")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+                .padding(.trailing)
+        }
+        .padding(.vertical, 8)
+        .background(.black.opacity(0.35))
+    }
+
+    /// Paysage : mode et déclencheur sur le bord droit, sous le pouce.
+    private var landscapeSideControls: some View {
+        VStack(spacing: 16) {
+            modeButton("Photo", .photo)
+            modeButton("Vidéo", .video)
+            shutterButton
+        }
+        .padding(14)
+        .background(.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 24))
+        .padding(.trailing, 12)
+        .padding(.bottom, 40)
     }
 
     private func modeButton(_ label: String, _ mode: CameraController.CaptureMode) -> some View {
