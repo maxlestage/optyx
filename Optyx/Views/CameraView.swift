@@ -45,6 +45,7 @@ struct CameraView: View {
                         if camera.mode == .video { cineToggle }
                         if camera.mode == .video { letterboxToggle }
                         if camera.depthAvailable { depthToggle }
+                        timerToggle
                         if camera.mode == .photo { formatMenu }
                         if camera.rawSupported && camera.mode == .photo { rawToggle }
                         histogramToggle
@@ -75,6 +76,15 @@ struct CameraView: View {
                     .padding(10)
                     .background(.ultraThinMaterial, in: Capsule())
                     .transition(.opacity)
+            }
+
+            if let countdown = camera.countdown {
+                Text("\(countdown)")
+                    .font(.system(size: 110, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.6), radius: 8)
+                    .transition(.opacity)
+                    .id(countdown)
             }
         }
         .simultaneousGesture(
@@ -172,6 +182,31 @@ struct CameraView: View {
                 .foregroundStyle(camera.peakingEnabled ? .black : .white)
         }
         .buttonStyle(.plain)
+    }
+
+    /// Retardateur : un tap cycle Off → 3 s → 5 s → 10 s.
+    private var timerToggle: some View {
+        Button {
+            camera.timerSetting = camera.timerSetting.next
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "timer")
+                if camera.timerSetting != .off {
+                    Text("\(camera.timerSetting.rawValue) s")
+                }
+            }
+            .font(.caption.weight(.bold))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule().fill(camera.timerSetting != .off
+                               ? Color.orange.opacity(0.9)
+                               : Color.white.opacity(0.15))
+            )
+            .foregroundStyle(camera.timerSetting != .off ? .black : .white)
+        }
+        .buttonStyle(.plain)
+        .disabled(camera.countdown != nil)
     }
 
     /// Formats de cadrage photo : 4:3 natif, 3:2 film 135, 1:1 (6×6),
@@ -419,11 +454,7 @@ struct CameraView: View {
             }
 
             Button {
-                if camera.mode == .photo {
-                    camera.capturePhoto()
-                } else {
-                    camera.toggleRecording()
-                }
+                camera.triggerShutter()
             } label: {
                 ZStack {
                     Circle().stroke(.white, lineWidth: 4).frame(width: 72, height: 72)

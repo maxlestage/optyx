@@ -28,6 +28,20 @@ final class CameraController: NSObject, ObservableObject {
         let blue: [Float]
     }
 
+    /// Retardateur du déclencheur.
+    enum TimerSetting: Int, CaseIterable {
+        case off = 0
+        case three = 3
+        case five = 5
+        case ten = 10
+
+        var next: TimerSetting {
+            let all = TimerSetting.allCases
+            let index = all.firstIndex(of: self) ?? 0
+            return all[(index + 1) % all.count]
+        }
+    }
+
     /// Formats de cadrage photo, hérités des grands classiques argentiques.
     enum PhotoFormat: String, CaseIterable {
         case fourThree = "4:3"
@@ -67,6 +81,7 @@ final class CameraController: NSObject, ObservableObject {
     /// Photo ou vidéo (change le rôle du déclencheur).
     @Published var mode: CaptureMode = .photo {
         didSet {
+            cancelCountdown()
             updateFrameRate()
             updateLetterbox()
             updateFourK()
@@ -74,6 +89,10 @@ final class CameraController: NSObject, ObservableObject {
             updatePhotoFormat()
         }
     }
+
+    /// Retardateur : réglage choisi et compte à rebours en cours (nil sinon).
+    @Published var timerSetting: TimerSetting = .off
+    @Published var countdown: Int?
 
     /// Format de cadrage photo (recadrage centré appliqué avant les filtres).
     @Published var photoFormat: PhotoFormat = .fourThree {
@@ -167,6 +186,8 @@ final class CameraController: NSObject, ObservableObject {
     private var fourKActive = false
     /// Miroir du format photo côté `videoQueue` (nil = natif ou mode vidéo).
     private var photoFormatRatio: CGFloat?
+    /// Minuteur du retardateur (fil principal).
+    private var countdownTimer: Timer?
     /// Miroir de `hdrEnabled && mode == .video` côté `videoQueue`.
     private var hdrActive = false
     /// Format 10 bits du pool en cours (pour le recréer au changement).
@@ -219,6 +240,7 @@ final class CameraController: NSObject, ObservableObject {
     }
 
     func stop() {
+        cancelCountdown()
         if isRecording { stopRecording() }
         sessionQueue.async { [session] in
             if session.isRunning { session.stopRunning() }
@@ -607,6 +629,51 @@ final class CameraController: NSObject, ObservableObject {
         }
         guard let range = cachedDepthRange else { return nil }
         return DepthExtractor.farMask(map, range: range, farIsSmall: true)
+    }
+
+    // MARK: - Déclencheur et retardateur
+
+    /// Action du déclencheur : immédiate, ou différée par le retardateur.
+    /// Pendant un compte à rebours, un nouvel appui l'annule ; pendant un
+    /// enregistrement vidéo, l'appui arrête immédiatement (jamais différé).
+    func triggerShutter() {
+        if countdown != nil {
+            cancelCountdown()
+            return
+        }
+        if mode == .video && isRecording {
+            toggleRecording()
+            return
+        }
+        guard timerSetting != .off else {
+            performShutter()
+            return
+        }
+        countdown = timerSetting.rawValue
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1,
+                                              repeats: true) { [weak self] _ in
+            guard let self, let remaining = self.countdown else { return }
+            if remaining <= 1 {
+                self.cancelCountdown()
+                self.performShutter()
+            } else {
+                self.countdown = remaining - 1
+            }
+        }
+    }
+
+    private func cancelCountdown() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        countdown = nil
+    }
+
+    private func performShutter() {
+        if mode == .photo {
+            capturePhoto()
+        } else {
+            toggleRecording()
+        }
     }
 
     // MARK: - Capture photo

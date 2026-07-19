@@ -46,7 +46,10 @@ sur vos photos existantes.
 - **Contrôles de prise de vue** — bascule caméra arrière ↔ frontale
   (TrueDepth : la profondeur reste disponible en selfie), **zoom par
   pincement** (pastille tap-pour-revenir-à-1×), verrouillage
-  **AE/AF** (exposition + mise au point).
+  **AE/AF** (exposition + mise au point), **retardateur 3 s / 5 s / 10 s**
+  (pastille cyclique, compte à rebours plein écran, un tap sur le
+  déclencheur annule ; différé aussi pour lancer une vidéo, jamais pour
+  l'arrêter).
 - **Formats photo** — menu de cadrage dans le viseur : **4:3** natif,
   **3:2** (film 135), **1:1** (6×6 moyen format), **16:9** et **65:24**
   (panoramique XPan). Recadrage centré appliqué **avant** la chaîne de
