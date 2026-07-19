@@ -1,4 +1,5 @@
 import CoreImage
+import CoreVideo
 import UIKit
 
 /// Extrait des photos Portrait un masque d'arrière-plan

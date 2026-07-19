@@ -1,5 +1,7 @@
 import AVFoundation
 import CoreImage
+import CoreMedia
+import CoreVideo
 import VideoToolbox
 
 /// Écrit la vidéo filtrée en HEVC (.mov) : reçoit les pixel buffers déjà
