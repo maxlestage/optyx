@@ -1,3 +1,4 @@
+import AVKit
 import CoreImage
 import MetalKit
 import SwiftUI
@@ -80,6 +81,10 @@ final class PreviewRenderer: NSObject, MTKViewDelegate {
 /// Enveloppe SwiftUI de la MTKView du viseur.
 struct MetalPreviewView: UIViewRepresentable {
     let renderer: PreviewRenderer
+    /// Déclencheur matériel : appelé quand l'utilisateur appuie sur un
+    /// bouton de volume (ou le bouton Commande de l'appareil photo) alors
+    /// que le viseur est actif — comme l'app Appareil photo d'Apple.
+    var onHardwareShutter: (() -> Void)?
 
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero, device: renderer.device)
@@ -91,6 +96,17 @@ struct MetalPreviewView: UIViewRepresentable {
         // jusqu'à 33 ms de gigue de présentation (saccades perçues).
         view.preferredFramesPerSecond = 120
         view.backgroundColor = .black
+
+        if #available(iOS 17.2, *), let onHardwareShutter {
+            // L'interaction ne capte les boutons physiques que lorsqu'une
+            // session de capture est active ; sinon iOS garde son
+            // comportement normal (volume).
+            let interaction = AVCaptureEventInteraction { event in
+                guard event.phase == .ended else { return }
+                onHardwareShutter()
+            }
+            view.addInteraction(interaction)
+        }
         return view
     }
 

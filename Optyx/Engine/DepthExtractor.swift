@@ -39,6 +39,14 @@ enum DepthExtractor {
         let max: Float
     }
 
+    /// Étalonnage ABSOLU du flux direct : la disparité LiDAR / double
+    /// capteur est en 1/mètres — le masque suit la vraie distance, pas la
+    /// composition de la scène. Net en deçà de ~0,9 m (disparité ≥ 1.15),
+    /// effet plein au-delà de ~3,3 m (disparité ≤ 0.30), rampe entre les
+    /// deux. Constantes fixes = aucune mesure, aucun lissage, aucune
+    /// oscillation possible de la normalisation.
+    static let liveAbsoluteRange = DepthRange(min: 0.30, max: 1.15)
+
     /// Normalise une carte de profondeur/disparité en masque 0…1 où
     /// l'arrière-plan (loin) tend vers le blanc.
     static func normalizedFarMask(_ map: CIImage, farIsSmall: Bool) -> CIImage? {
