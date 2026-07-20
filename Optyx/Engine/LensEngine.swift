@@ -425,12 +425,18 @@ final class LensEngine {
                                extent: CGRect, customMask: CIImage? = nil) -> CIImage {
         let strength = lens.vignette * k
         guard strength > 0.02 else { return img }
+        // Réglage adouci : l'ancien barème (intensité 1.1 × force, rayon
+        // 0.75) noircissait presque les coins sur les profils à fort
+        // vignettage (Noctilux, Dream Lens) et assombrissait toute la
+        // photo. Le rayon élargi repousse l'assombrissement vers les
+        // bords, l'intensité réduite le rend translucide — les écarts
+        // entre objectifs sont conservés.
         let filter = CIFilter.vignetteEffect()
         filter.inputImage = img
         filter.center = center
-        filter.radius = Float(dim * 0.75)
-        filter.intensity = Float(1.1 * strength)
-        filter.falloff = 0.5
+        filter.radius = Float(dim * 0.88)
+        filter.intensity = Float(0.72 * strength)
+        filter.falloff = 0.4
         guard let vignetted = filter.outputImage else { return img }
 
         guard let customMask else { return vignetted }
