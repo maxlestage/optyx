@@ -135,7 +135,12 @@ final class LensEngine {
 
         /// Copie tourbillonnée pour une amplitude donnée (1 = nominale).
         func swirledLayer(amplitude: Double) -> CIImage? {
-            let maxAngle = 0.045 * strength * amplitude
+            // 0.065 rad : la rotation moyenne est géométriquement nulle au
+            // centre du cadre (sujet, horizon) — une amplitude timide rend
+            // le tourbillon invisible partout sauf dans les coins, que le
+            // vignettage recouvre. Le flou tangentiel accru fusionne les
+            // copies discrètes aux bords.
+            let maxAngle = 0.065 * strength * amplitude
             var accumulated: CIImage?
             for offset in offsets {
                 let angle = CGFloat(offset * maxAngle)
@@ -154,7 +159,7 @@ final class LensEngine {
                 }
             }
             guard let swirled = accumulated else { return nil }
-            let sigma = (1.2 + 2.5 * strength) * (0.4 + 0.6 * amplitude)
+            let sigma = (1.2 + 3.2 * strength) * (0.4 + 0.6 * amplitude)
             return swirled.clampedToExtent()
                 .applyingGaussianBlur(sigma: sigma)
                 .cropped(to: extent)
@@ -235,7 +240,11 @@ final class LensEngine {
         guard strength > 0.1 else { return img }
 
         let mono = CIFilter.colorControls()
-        mono.inputImage = img
+        // Avec un masque de profondeur, seules les hautes lumières de
+        // l'ARRIÈRE-PLAN engendrent des bulles : celles du sujet (chemise
+        // blanche, reflets du visage) produisaient des anneaux collés à
+        // la silhouette au lieu de venir du fond.
+        mono.inputImage = customMask.map { multiplied(img, $0) } ?? img
         mono.saturation = 0
         mono.contrast = 1
         guard let gray = mono.outputImage else { return img }
@@ -308,18 +317,28 @@ final class LensEngine {
                            customMask: CIImage? = nil) -> CIImage {
         let strength = lens.glow * k
         guard strength > 0.02 else { return img }
+        // Avec un masque de profondeur, le bloom est alimenté par l'image
+        // dont le sujet est éteint (multiplication par le masque) : sinon,
+        // les hautes lumières du sujet (chemise blanche, visage) débordent
+        // en halo blanc collé à la silhouette — le défaut le plus visible
+        // sur les photos Portrait, identique quel que soit l'objectif.
+        let source = customMask.map { multiplied(img, $0) } ?? img
         let bloom = CIFilter.bloom()
-        bloom.inputImage = img.clampedToExtent()
+        bloom.inputImage = source.clampedToExtent()
         bloom.intensity = Float(0.9 * strength)
         bloom.radius = Float(dim * 0.02 * (0.5 + strength))
         guard let bloomed = bloom.outputImage?.cropped(to: extent) else { return img }
 
         guard let customMask else { return bloomed }
-        let blend = CIFilter.blendWithMask()
-        blend.inputImage = bloomed
-        blend.backgroundImage = img
-        blend.maskImage = boosted(customMask, floor: 0.35)
-        return blend.outputImage ?? bloomed
+        // Le bloom du fond est réincrusté en mode écran : l'image garde sa
+        // luminosité d'origine partout (le sujet n'est pas assombri par la
+        // source éteinte), seul le halo du fond s'ajoute.
+        let screen = CIFilter.screenBlendMode()
+        screen.inputImage = multiplied(subtracted(bloomed, minus: source),
+                                       boosted(customMask, floor: 0.35))
+            .cropped(to: extent)
+        screen.backgroundImage = img
+        return screen.outputImage ?? img
     }
 
     /// Aberration chromatique latérale : les canaux rouge et bleu sont
@@ -514,6 +533,32 @@ final class LensEngine {
         multiply.inputImage = a
         multiply.backgroundImage = b
         return multiply.outputImage ?? a
+    }
+
+    /// Différence bornée `a − b` (canaux RVB, alpha ramené à 1).
+    /// Sert à isoler le halo pur d'un bloom : bloom(source) − source.
+    /// L'espace de travail de Core Image (flottant) tolère les valeurs
+    /// négatives intermédiaires ; le clamp final les élimine.
+    private func subtracted(_ a: CIImage, minus b: CIImage) -> CIImage {
+        let negative = CIFilter.colorMatrix()
+        negative.inputImage = b
+        negative.rVector = CIVector(x: -1, y: 0, z: 0, w: 0)
+        negative.gVector = CIVector(x: 0, y: -1, z: 0, w: 0)
+        negative.bVector = CIVector(x: 0, y: 0, z: -1, w: 0)
+        negative.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        negative.biasVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        guard let neg = negative.outputImage else { return a }
+
+        let add = CIFilter.additionCompositing()
+        add.inputImage = a
+        add.backgroundImage = neg
+        guard let sum = add.outputImage else { return a }
+
+        let clamp = CIFilter.colorClamp()
+        clamp.inputImage = sum
+        clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
+        clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
+        return clamp.outputImage ?? sum
     }
 
     /// Redimensionne un masque (ex. carte de profondeur, résolution réduite)
