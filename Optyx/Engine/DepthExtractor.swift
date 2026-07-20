@@ -43,7 +43,37 @@ enum DepthExtractor {
     /// l'arrière-plan (loin) tend vers le blanc.
     static func normalizedFarMask(_ map: CIImage, farIsSmall: Bool) -> CIImage? {
         guard let range = range(of: map) else { return nil }
-        return farMask(map, range: range, farIsSmall: farIsSmall)
+        let mask = farMask(map, range: range, farIsSmall: farIsSmall)
+        // Masque quasi vide (scène sans arrière-plan visible : sujet proche
+        // qui remplit le cadre) : appliqué tel quel, il supprimerait les
+        // effets gradués sur TOUTE l'image — « aucun objectif ne fait
+        // rien ». Mieux vaut pas de masque : le rendu repasse au masque
+        // radial et la signature de l'objectif reste visible.
+        if let coverage = averageLuminance(of: mask), coverage < 0.06 {
+            return nil
+        }
+        return mask
+    }
+
+    /// Luminance moyenne d'un masque (0…1) — sert à mesurer la fraction
+    /// d'arrière-plan réellement couverte. Aller-retour GPU→CPU d'un seul
+    /// pixel ; la caméra l'exécute sur sa file d'analyse.
+    static func averageLuminance(of image: CIImage,
+                                 context: CIContext = LensEngine.shared.context) -> Float? {
+        guard !image.extent.isEmpty, !image.extent.isInfinite else { return nil }
+        let filter = CIFilter(name: "CIAreaAverage", parameters: [
+            kCIInputImageKey: image,
+            kCIInputExtentKey: CIVector(cgRect: image.extent),
+        ])
+        guard let output = filter?.outputImage else { return nil }
+        var pixel = [Float](repeating: 0, count: 4)
+        context.render(output,
+                       toBitmap: &pixel,
+                       rowBytes: 16,
+                       bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                       format: .RGBAf,
+                       colorSpace: nil)
+        return pixel[0]
     }
 
     /// Mesure le min/max de la carte — seule étape avec un aller-retour
