@@ -99,7 +99,10 @@ sur vos photos existantes.
   plage robuste (flou avant min/max), hystérésis d'acquisition/maintien,
   zone morte à plancher absolu, lissage doux, débounce et période de grâce
   de ~2 s avant de relâcher le masque — le halo de l'arrière-plan ne
-  clignote pas, même sur une scène plate en basse lumière.
+  clignote pas, même sur une scène plate en basse lumière. Quand la scène
+  n'a pratiquement pas d'arrière-plan (sujet proche remplissant le cadre),
+  le masque s'écarte de lui-même : les effets repassent au masque radial
+  au lieu de disparaître de toute l'image.
 - **RAW / Apple ProRAW** — bouton RAW dans le viseur : la capture enregistre
   le DNG original (ProRAW sur iPhone 12 Pro et ultérieurs, RAW Bayer sinon)
   joint en ressource alternative à la photo vintage. Le RAW conserve les

@@ -756,11 +756,27 @@ final class CameraController: NSObject, ObservableObject {
             // disparaître le masque à chaque mesure — tous les effets
             // gradués clignotaient toutes les ~5 trames.
             depthRangeInFlight = true
-            let minSpan: Float = cachedDepthRange == nil ? 0.035 : 0.015
+            let acquired = cachedDepthRange != nil
+            let minSpan: Float = acquired ? 0.015 : 0.035
+            // Fraction minimale d'arrière-plan : un masque quasi vide
+            // (sujet proche remplissant le cadre) supprimerait les effets
+            // gradués sur toute l'image — « aucun objectif ne fait rien ».
+            // Sous ce seuil, la mesure est traitée comme un rejet : le
+            // rendu repasse au masque radial et la signature de
+            // l'objectif reste visible. Hystérésis comme pour la plage.
+            let minCoverage: Float = acquired ? 0.04 : 0.08
             analysisQueue.async { [weak self] in
                 guard let self else { return }
-                let fresh = DepthExtractor.range(of: map, context: self.analysisContext,
+                var fresh = DepthExtractor.range(of: map, context: self.analysisContext,
                                                  minSpan: minSpan)
+                if let range = fresh {
+                    let mask = DepthExtractor.farMask(map, range: range, farIsSmall: true)
+                    let coverage = DepthExtractor.averageLuminance(
+                        of: mask, context: self.analysisContext)
+                    if coverage == nil || coverage! < minCoverage {
+                        fresh = nil
+                    }
+                }
                 self.videoQueue.async {
                     if let fresh {
                         self.depthRangeMissStreak = 0
