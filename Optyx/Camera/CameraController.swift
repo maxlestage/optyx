@@ -1019,11 +1019,16 @@ final class CameraController: NSObject, ObservableObject {
                 // Sans borne, l'exposition automatique allonge le temps de
                 // pose en basse lumière et fait tomber le capteur à
                 // ~15-20 i/s : viseur saccadé (intervalle de trame en dents
-                // de scie) alors que le GPU est quasi inactif. On verrouille
-                // le plancher à 30 i/s — l'exposition compense à l'ISO,
-                // comme l'app Appareil photo d'Apple.
-                if ranges.contains(where: { $0.minFrameRate <= 30 && 30 <= $0.maxFrameRate }) {
-                    device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 30)
+                // de scie) alors que le GPU est quasi inactif. Plancher :
+                // 30 i/s en vidéo (cadence du fichier), mais 24 i/s en
+                // photo — +33 % de lumière en basse lumière (viseur moins
+                // sombre) pour une fluidité toujours parfaite, l'exposition
+                // compensant le reste à l'ISO.
+                let floorRate: Double = self.mode == .video ? 30 : 24
+                if ranges.contains(where: { $0.minFrameRate <= floorRate
+                        && floorRate <= $0.maxFrameRate }) {
+                    device.activeVideoMaxFrameDuration = CMTime(
+                        value: 1, timescale: CMTimeScale(floorRate))
                 } else {
                     device.activeVideoMaxFrameDuration = .invalid
                 }
