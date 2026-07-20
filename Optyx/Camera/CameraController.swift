@@ -169,7 +169,6 @@ final class CameraController: NSObject, ObservableObject {
     private let analysisContext = CIContext(options: [.cacheIntermediates: false])
     /// Analyses en cours, pour ne pas empiler (confinés à `videoQueue`).
     private var histogramInFlight = false
-    private var depthRangeInFlight = false
     private let videoOutput = AVCaptureVideoDataOutput()
     private let depthOutput = AVCaptureDepthDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
@@ -278,29 +277,9 @@ final class CameraController: NSObject, ObservableObject {
     private let histogramInterval = 3
     private let histogramBins = 64
 
-    /// Cache de la plage de profondeur du flux direct : la mesure min/max
-    /// (aller-retour GPU→CPU) n'est refaite qu'une image sur
-    /// `depthRangeRefreshInterval`, la plage d'une scène évoluant lentement.
-    /// Accédé uniquement depuis `videoQueue`.
-    private var cachedDepthRange: DepthExtractor.DepthRange?
-    private var depthFrameCounter = 0
-    /// Une mesure toutes les 10 trames (3×/s) : la plage d'une scène évolue
-    /// lentement, et chaque mesure évitée est un aller-retour GPU→CPU en
-    /// moins sur la file d'analyse. Divise aussi par deux la fréquence de
-    /// toute oscillation résiduelle de la normalisation.
-    private let depthRangeRefreshInterval = 10
-    /// Débounce de l'état du masque de profondeur. Mesuré sur appareil :
-    /// une plage effacée dès la première mesure rejetée puis réacquise
-    /// 1-2 trames plus tard faisait clignoter le halo de l'arrière-plan
-    /// (flash sombre périodique dans le viseur). L'acquisition exige
-    /// 2 mesures bonnes consécutives ; le relâchement exige 6 rejets
-    /// consécutifs (~2 s à une mesure toutes les 10 trames) — une plage
-    /// conservée sur une carte devenue plate reste stable grâce au flou
-    /// de mesure et à la zone morte.
-    private var depthRangeGoodStreak = 0
-    private var depthRangeMissStreak = 0
-    private let depthRangeAcquireStreak = 2
-    private let depthRangeReleaseStreak = 6
+    // La profondeur du flux direct est étalonnée en ABSOLU
+    // (DepthExtractor.liveAbsoluteRange) : plus aucune mesure de plage,
+    // aucun cache ni lissage — le masque suit la vraie distance LiDAR.
 
     /// Anneau de pixel buffers réutilisables dans lesquels la chaîne de
     /// filtres est rendue une seule fois par trame ; le renderer Metal ne
@@ -315,12 +294,6 @@ final class CameraController: NSObject, ObservableObject {
     // MARK: - Cycle de vie
 
     func start() {
-        videoQueue.async { [weak self] in
-            self?.cachedDepthRange = nil
-            self?.depthFrameCounter = 0
-            self?.depthRangeGoodStreak = 0
-            self?.depthRangeMissStreak = 0
-        }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             configureAndRun()
@@ -723,13 +696,15 @@ final class CameraController: NSObject, ObservableObject {
 
     /// Convertit une carte de profondeur AVFoundation en masque
     /// d'arrière-plan (blanc = loin) orienté comme la prévisualisation.
-    /// Version complète (mesure de plage incluse), pour la capture photo.
+    /// Même étalonnage absolu que le viseur : la photo capturée rend
+    /// exactement ce que le viseur montrait.
     private static func backgroundMask(from depthData: AVDepthData,
                                        orientation: CGImagePropertyOrientation) -> CIImage? {
         let disparity = depthData.converting(
             toDepthDataType: kCVPixelFormatType_DisparityFloat32)
         let map = CIImage(cvPixelBuffer: disparity.depthDataMap).oriented(orientation)
-        return DepthExtractor.normalizedFarMask(map, farIsSmall: true)
+        return DepthExtractor.farMask(map, range: DepthExtractor.liveAbsoluteRange,
+                                      farIsSmall: true)
     }
 
     /// Version pour le flux direct : réutilise la plage min/max mise en
@@ -744,99 +719,15 @@ final class CameraController: NSObject, ObservableObject {
             toDepthDataType: kCVPixelFormatType_DisparityFloat32)
         let map = CIImage(cvPixelBuffer: disparity.depthDataMap).oriented(sensorOrientation)
 
-        depthFrameCounter += 1
-        if cachedDepthRange == nil
-            || depthFrameCounter % depthRangeRefreshInterval == 1,
-           !depthRangeInFlight {
-            // Mesure min/max sur la file d'analyse : la plage d'une scène
-            // évolue lentement, une valeur en léger différé suffit.
-            // Hystérésis : seuil d'acquisition haut (0.035), seuil de
-            // maintien bas (0.015). Sans elle, une scène dont le relief
-            // oscille autour d'un seuil unique faisait apparaître puis
-            // disparaître le masque à chaque mesure — tous les effets
-            // gradués clignotaient toutes les ~5 trames.
-            depthRangeInFlight = true
-            let acquired = cachedDepthRange != nil
-            let minSpan: Float = acquired ? 0.015 : 0.035
-            // Fraction minimale d'arrière-plan : un masque quasi vide
-            // (sujet proche remplissant le cadre) supprimerait les effets
-            // gradués sur toute l'image — « aucun objectif ne fait rien ».
-            // Sous ce seuil, la mesure est traitée comme un rejet : le
-            // rendu repasse au masque radial et la signature de
-            // l'objectif reste visible. Hystérésis comme pour la plage.
-            let minCoverage: Float = acquired ? 0.04 : 0.08
-            analysisQueue.async { [weak self] in
-                guard let self else { return }
-                var fresh = DepthExtractor.range(of: map, context: self.analysisContext,
-                                                 minSpan: minSpan)
-                if let range = fresh {
-                    let mask = DepthExtractor.farMask(map, range: range, farIsSmall: true)
-                    let coverage = DepthExtractor.averageLuminance(
-                        of: mask, context: self.analysisContext)
-                    if coverage == nil || coverage! < minCoverage {
-                        fresh = nil
-                    }
-                }
-                self.videoQueue.async {
-                    if let fresh {
-                        self.depthRangeMissStreak = 0
-                        if let old = self.cachedDepthRange {
-                            // Zone morte : une mesure qui ne bouge que dans
-                            // le bruit ne change RIEN — masque parfaitement
-                            // immobile sur une scène statique. Plancher
-                            // absolu (0.01) : sur une scène à faible
-                            // relief, 10 % d'une plage minuscule était
-                            // plus petit que le bruit du capteur — la
-                            // plage dérivait par lissage puis se
-                            // réinitialisait (dent de scie de luminosité
-                            // mesurée à ~4 Hz sur enregistrement).
-                            // Au-delà, lissage exponentiel doux (0.15).
-                            let span = max(old.max - old.min, 0.001)
-                            let deadband = max(span * 0.1, 0.01)
-                            if abs(fresh.min - old.min) < deadband,
-                               abs(fresh.max - old.max) < deadband {
-                                // Plage conservée telle quelle.
-                            } else {
-                                self.cachedDepthRange = DepthExtractor.DepthRange(
-                                    min: old.min + (fresh.min - old.min) * 0.15,
-                                    max: old.max + (fresh.max - old.max) * 0.15)
-                            }
-                        } else {
-                            // Débounce d'acquisition : une seule mesure
-                            // bonne peut n'être qu'un pic de bruit — on en
-                            // exige deux consécutives avant d'activer le
-                            // masque (sinon il apparaît pour une trame et
-                            // disparaît : flash visible).
-                            self.depthRangeGoodStreak += 1
-                            if self.depthRangeGoodStreak >= self.depthRangeAcquireStreak {
-                                self.cachedDepthRange = fresh
-                                self.depthRangeGoodStreak = 0
-                            }
-                        }
-                    } else {
-                        self.depthRangeGoodStreak = 0
-                        // Période de grâce : une mesure rejetée n'efface
-                        // PLUS la plage immédiatement — l'ancienne plage
-                        // appliquée à une carte momentanément plate reste
-                        // stable (flou de mesure + zone morte), alors que
-                        // l'effacement immédiat suivi d'une réacquisition
-                        // 1-2 trames plus tard faisait clignoter le halo
-                        // de l'arrière-plan (mesuré sur enregistrement :
-                        // flash sombre périodique). On n'efface qu'après
-                        // ~2 s de rejets consécutifs : la scène est alors
-                        // réellement plate, et le masque s'en va une fois,
-                        // proprement.
-                        self.depthRangeMissStreak += 1
-                        if self.depthRangeMissStreak >= self.depthRangeReleaseStreak {
-                            self.cachedDepthRange = nil
-                        }
-                    }
-                    self.depthRangeInFlight = false
-                }
-            }
-        }
-        guard let range = cachedDepthRange else { return nil }
-        return DepthExtractor.farMask(map, range: range, farIsSmall: true)
+        // Étalonnage ABSOLU : la disparité est en 1/mètres, le masque suit
+        // la vraie distance mesurée par le LiDAR / double capteur — net en
+        // deçà de ~0,9 m, effet plein au-delà de ~3,3 m, quelle que soit
+        // la composition de la scène. Plus aucune mesure de plage, aucun
+        // cache, aucun lissage : des constantes fixes ne peuvent pas
+        // osciller. Quand la pastille Profondeur est active, ce masque
+        // fait TOUTE la loi — pas de repli radial.
+        return DepthExtractor.farMask(map, range: DepthExtractor.liveAbsoluteRange,
+                                      farIsSmall: true)
     }
 
     // MARK: - Déclencheur et retardateur
@@ -1092,12 +983,6 @@ final class CameraController: NSObject, ObservableObject {
         isFrontCamera = cameraPosition == .front
         exposureFocusLocked = false
         zoomFactor = 1
-        videoQueue.async { [weak self] in
-            self?.cachedDepthRange = nil
-            self?.depthFrameCounter = 0
-            self?.depthRangeGoodStreak = 0
-            self?.depthRangeMissStreak = 0
-        }
         sessionQueue.async { [weak self] in
             guard let self else { return }
             let wasRunning = self.session.isRunning

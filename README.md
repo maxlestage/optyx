@@ -95,14 +95,16 @@ sur vos photos existantes.
   synchronisée avec la vidéo) : dans le viseur comme sur la photo capturée,
   le bokeh vintage ne s'applique qu'à l'arrière-plan réel, le sujet reste
   net. Pastille « Profondeur » pour revenir au masque radial.
-  La normalisation du masque est **stabilisée dans le temps** : mesure de
-  plage robuste (flou avant min/max), hystérésis d'acquisition/maintien,
-  zone morte à plancher absolu, lissage doux, débounce et période de grâce
-  de ~2 s avant de relâcher le masque — le halo de l'arrière-plan ne
-  clignote pas, même sur une scène plate en basse lumière. Quand la scène
-  n'a pratiquement pas d'arrière-plan (sujet proche remplissant le cadre),
-  le masque s'écarte de lui-même : les effets repassent au masque radial
-  au lieu de disparaître de toute l'image.
+  Le masque est **étalonné en distance absolue** : la disparité LiDAR /
+  double capteur est en 1/mètres — net en deçà de ~0,9 m, effet plein
+  au-delà de ~3,3 m, rampe entre les deux, quelle que soit la composition
+  de la scène. Aucune normalisation relative, aucune mesure ni lissage :
+  le masque ne peut pas osciller, et la photo capturée rend exactement ce
+  que montrait le viseur. Pastille Profondeur active = la distance réelle
+  fait toute la loi ; désactivée = masque radial classique.
+- **Déclencheur physique** — les boutons de volume (et le bouton Commande
+  de l'appareil photo) déclenchent la capture quand le viseur est actif,
+  comme l'app Appareil photo (`AVCaptureEventInteraction`, iOS 17.2+).
 - **RAW / Apple ProRAW** — bouton RAW dans le viseur : la capture enregistre
   le DNG original (ProRAW sur iPhone 12 Pro et ultérieurs, RAW Bayer sinon)
   joint en ressource alternative à la photo vintage. Le RAW conserve les

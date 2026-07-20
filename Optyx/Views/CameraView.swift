@@ -29,7 +29,8 @@ struct CameraView: View {
 
             switch camera.status {
             case .running, .idle:
-                MetalPreviewView(renderer: camera.previewRenderer)
+                MetalPreviewView(renderer: camera.previewRenderer,
+                                 onHardwareShutter: { camera.triggerShutter() })
                     .ignoresSafeArea(edges: .top)
                     .onTapGesture {
                         withAnimation(.easeInOut(duration: 0.2)) {
