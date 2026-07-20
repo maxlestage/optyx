@@ -82,13 +82,13 @@ final class LensEngine {
         // le caractère vient des effets optiques.
         let controls = CIFilter.colorControls()
         controls.inputImage = out
-        controls.contrast = Float(1.0 - 0.11 * lens.fade * k)
+        controls.contrast = Float(1.0 - 0.06 * lens.fade * k)
         controls.saturation = Float(1.0 + (lens.saturation - 1.0) * k)
         controls.brightness = 0
         out = controls.outputImage ?? out
 
         if lens.fade > 0.01 {
-            let lift = CGFloat(0.035 * lens.fade * k)
+            let lift = CGFloat(0.02 * lens.fade * k)
             let poly = CIFilter.colorPolynomial()
             poly.inputImage = out
             let coeff = CIVector(x: lift, y: 1 - lift, z: 0, w: 0)
@@ -109,7 +109,7 @@ final class LensEngine {
         let filter = CIFilter.temperatureAndTint()
         filter.inputImage = img
         filter.neutral = CIVector(x: 6500, y: 0)
-        filter.targetNeutral = CIVector(x: 6500 + 1300 * lens.warmth * k, y: 2.5 * lens.warmth * k)
+        filter.targetNeutral = CIVector(x: 6500 + 900 * lens.warmth * k, y: 1.5 * lens.warmth * k)
         return filter.outputImage ?? img
     }
 
@@ -134,8 +134,13 @@ final class LensEngine {
             offsets = [-1.0, 1.0]
         } else if strength < 0.4 {
             offsets = [-1.0, -0.33, 0.33, 1.0]
-        } else {
+        } else if strength < 0.6 {
             offsets = [-1.0, -0.6, -0.2, 0.2, 0.6, 1.0]
+        } else {
+            // Grande amplitude : 8 copies pour que les répliques discrètes
+            // fusionnent en arc continu au lieu de dédoubler les hautes
+            // lumières.
+            offsets = [-1.0, -0.71, -0.43, -0.14, 0.14, 0.43, 0.71, 1.0]
         }
         let weight = CGFloat(1.0 / Double(offsets.count))
 
@@ -146,7 +151,7 @@ final class LensEngine {
             // le tourbillon invisible partout sauf dans les coins, que le
             // vignettage recouvre. Le flou tangentiel accru fusionne les
             // copies discrètes aux bords.
-            let maxAngle = 0.09 * strength * amplitude
+            let maxAngle = 0.12 * strength * amplitude
             var accumulated: CIImage?
             for offset in offsets {
                 let angle = CGFloat(offset * maxAngle)
@@ -222,7 +227,7 @@ final class LensEngine {
         // du coût, sur tous les profils.
         // Douceur renforcée : le fondu net → flou doit se voir, pas se
         // deviner.
-        let sigma = dim * 0.010 * strength
+        let sigma = dim * 0.013 * strength
         let blurred = img.clampedToExtent()
             .applyingGaussianBlur(sigma: sigma)
             .cropped(to: extent)
@@ -263,10 +268,10 @@ final class LensEngine {
         // bulles, anneaux plus grands — la signature Trioplan se voit.
         let threshold = CIFilter.colorThreshold()
         threshold.inputImage = gray
-        threshold.threshold = 0.74
+        threshold.threshold = 0.70
         guard let highlights = threshold.outputImage else { return img }
 
-        let baseRadius = Float(max(5, dim * 0.019))
+        let baseRadius = Float(max(6, dim * 0.024))
 
         /// Anneaux construits à partir des hautes lumières pour un diamètre donné.
         func ringLayer(discRadius: Float) -> CIImage? {
@@ -281,7 +286,7 @@ final class LensEngine {
             guard var rings = ring.outputImage else { return nil }
 
             rings = rings.applyingGaussianBlur(sigma: 1.0).cropped(to: extent)
-            return scaled(rings, by: CGFloat(min(1.0, 1.05 * strength)),
+            return scaled(rings, by: CGFloat(min(1.0, 1.25 * strength)),
                           tint: (r: 1.0, g: 0.96, b: 0.88))
         }
 
@@ -337,7 +342,10 @@ final class LensEngine {
         let source = customMask.map { multiplied(img, $0) } ?? img
         let bloom = CIFilter.bloom()
         bloom.inputImage = source.clampedToExtent()
-        bloom.intensity = Float(0.9 * strength)
+        // Le glow éclaire, il n'assombrit pas : renforcer sa présence va
+        // dans le sens d'une image lumineuse (le halo de silhouette est
+        // déjà neutralisé par la source masquée).
+        bloom.intensity = Float(1.15 * strength)
         bloom.radius = Float(dim * 0.02 * (0.5 + strength))
         guard let bloomed = bloom.outputImage?.cropped(to: extent) else { return img }
 
@@ -365,7 +373,7 @@ final class LensEngine {
         guard strength > 0.02 else { return img }
         // Franges renforcées : 0.0035 était sous le seuil de visibilité
         // sur un écran de téléphone.
-        let baseDelta = 0.0055 * strength
+        let baseDelta = 0.0075 * strength
 
         /// Image dont les franges sont décalées d'un delta donné.
         func aberrated(delta: Double) -> CIImage? {
@@ -448,9 +456,9 @@ final class LensEngine {
         let filter = CIFilter.vignetteEffect()
         filter.inputImage = img
         filter.center = center
-        filter.radius = Float(dim * 0.88)
-        filter.intensity = Float(0.72 * strength)
-        filter.falloff = 0.4
+        filter.radius = Float(dim * 0.92)
+        filter.intensity = Float(0.55 * strength)
+        filter.falloff = 0.35
         guard let vignetted = filter.outputImage else { return img }
 
         guard let customMask else { return vignetted }
