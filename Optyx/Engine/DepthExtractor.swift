@@ -129,7 +129,7 @@ enum DepthExtractor {
         return DepthRange(min: minValue, max: maxValue)
     }
 
-    /// Construit le masque à partir d'une plage déjà mesurée —
+    /// Construit le masque à partir d'une plage donnée —
     /// pure chaîne de filtres, sans lecture CPU.
     static func farMask(_ map: CIImage, range: DepthRange, farIsSmall: Bool) -> CIImage {
         let scale = CGFloat(1.0 / (range.max - range.min))
@@ -140,6 +140,15 @@ enum DepthExtractor {
             "inputBVector": CIVector(x: scale, y: 0, z: 0, w: 0),
             "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
             "inputBiasVector": CIVector(x: bias, y: bias, z: bias, w: 1),
+        ])
+
+        // Borne 0…1 INDISPENSABLE avec une plage absolue : les disparités
+        // hors plage sont la norme (objet à 0,5 m → 2.0 ; ciel → 0). Sans
+        // clamp, un proche donne un masque négatif et le gamma d'un
+        // négatif produit du NaN — taches corrompues à l'image.
+        mask = mask.applyingFilter("CIColorClamp", parameters: [
+            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1),
         ])
 
         if farIsSmall {
