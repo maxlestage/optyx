@@ -122,7 +122,14 @@ sur vos photos existantes.
 ## Comment sont simulés les « défauts » optiques
 
 Le moteur (`LensEngine`) enchaîne des filtres Core Image, chacun pilotant un
-défaut caractéristique, dosé par le profil de l'objectif :
+défaut caractéristique, dosé par le profil de l'objectif. Philosophie de
+réglage : **la lumière de la photo reste naturelle** (voile, dérive de
+température et vignettage en nuances translucides), et **la signature vient
+des effets optiques**, réglés pour être visibles au premier coup d'œil —
+tourbillon ample, bulles franches, franges perceptibles sur écran de
+téléphone. Sur les photos Portrait, le bloom et les bulles ne sont
+alimentés que par l'arrière-plan : aucun halo collé à la silhouette du
+sujet.
 
 - **Bokeh tourbillonnant** — moyenne de copies de l'image légèrement pivotées
   autour du centre (flou tangentiel croissant avec le rayon), masquée pour
