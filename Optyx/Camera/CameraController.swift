@@ -716,6 +716,7 @@ final class CameraController: NSObject, ObservableObject {
                                        orientation: CGImagePropertyOrientation) -> CIImage? {
         let disparity = depthData.converting(
             toDepthDataType: kCVPixelFormatType_DisparityFloat32)
+        DepthExtractor.scrubNonFinite(disparity.depthDataMap)
         let map = CIImage(cvPixelBuffer: disparity.depthDataMap).oriented(orientation)
         return DepthExtractor.farMask(map, range: DepthExtractor.liveAbsoluteRange,
                                       farIsSmall: true)
@@ -731,6 +732,8 @@ final class CameraController: NSObject, ObservableObject {
         // (~300×200 px), la conversion est négligeable.
         let disparity = depthData.converting(
             toDepthDataType: kCVPixelFormatType_DisparityFloat32)
+        // NaN → 0 AVANT toute lecture GPU : voir DepthExtractor.scrubNonFinite.
+        DepthExtractor.scrubNonFinite(disparity.depthDataMap)
         let map = CIImage(cvPixelBuffer: disparity.depthDataMap).oriented(sensorOrientation)
 
         // Étalonnage ABSOLU : la disparité est en 1/mètres, le masque suit
