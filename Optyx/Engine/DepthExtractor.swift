@@ -50,7 +50,11 @@ enum DepthExtractor {
     /// livrent souvent `.relative` — l'ordre des distances reste garanti
     /// (masque monotone, stable, borné), seuls les seuils métriques
     /// peuvent glisser. Dans les deux cas : jamais d'artefact.
-    static let liveAbsoluteRange = DepthRange(min: 0.30, max: 1.15)
+    /// Échelle d'intérieur : net en deçà de ~0,87 m (disparité ≥ 1.15),
+    /// effet plein dès ~2,2 m (disparité ≤ 0.45) — un mur de chambre ou
+    /// une TV comptent comme « loin ». L'ancienne borne à 3,3 m éteignait
+    /// les effets dans la quasi-totalité des scènes en intérieur.
+    static let liveAbsoluteRange = DepthRange(min: 0.45, max: 1.15)
 
     /// Normalise une carte de profondeur/disparité en masque 0…1 où
     /// l'arrière-plan (loin) tend vers le blanc.
