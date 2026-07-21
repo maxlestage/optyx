@@ -45,6 +45,11 @@ enum DepthExtractor {
     /// effet plein au-delà de ~3,3 m (disparité ≤ 0.30), rampe entre les
     /// deux. Constantes fixes = aucune mesure, aucun lissage, aucune
     /// oscillation possible de la normalisation.
+    /// Précision (doc Apple `AVDepthData.depthDataAccuracy`) : le LiDAR
+    /// livre `.absolute` (vrais 1/m) ; les doubles capteurs sans LiDAR
+    /// livrent souvent `.relative` — l'ordre des distances reste garanti
+    /// (masque monotone, stable, borné), seuls les seuils métriques
+    /// peuvent glisser. Dans les deux cas : jamais d'artefact.
     static let liveAbsoluteRange = DepthRange(min: 0.30, max: 1.15)
 
     /// Normalise une carte de profondeur/disparité en masque 0…1 où

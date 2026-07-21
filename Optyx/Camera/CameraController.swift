@@ -169,6 +169,9 @@ final class CameraController: NSObject, ObservableObject {
     private let analysisContext = CIContext(options: [.cacheIntermediates: false])
     /// Analyses en cours, pour ne pas empiler (confinés à `videoQueue`).
     private var histogramInFlight = false
+    /// Sortie de profondeur configurée sur la session courante
+    /// (confiné à `sessionQueue`) — pilote le bornage du zoom.
+    private var depthConfigured = false
     private let videoOutput = AVCaptureVideoDataOutput()
     private let depthOutput = AVCaptureDepthDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
@@ -391,7 +394,7 @@ final class CameraController: NSObject, ObservableObject {
         }
 
         // Profondeur en direct : sortie dédiée synchronisée avec la vidéo.
-        var depthConfigured = false
+        depthConfigured = false
         if !device.activeFormat.supportedDepthDataFormats.isEmpty,
            session.canAddOutput(depthOutput) {
             session.addOutput(depthOutput)
@@ -414,6 +417,17 @@ final class CameraController: NSObject, ObservableObject {
             synchronizer.setDelegate(self, queue: videoQueue)
             outputSynchronizer = synchronizer
             depthConfigured = true
+
+            // Certains formats n'acceptent la livraison de profondeur qu'à
+            // partir d'un zoom minimal (> 1 sur les appareils virtuels
+            // récents) : sous ce seuil, iOS ne livre tout simplement
+            // aucune carte. On aligne le zoom initial sur la plage valide.
+            let minDepthZoom = device.activeFormat.videoMinZoomFactorForDepthDataDelivery
+            if minDepthZoom > 1, (try? device.lockForConfiguration()) != nil {
+                device.videoZoomFactor = minDepthZoom
+                device.unlockForConfiguration()
+                DispatchQueue.main.async { self.zoomFactor = minDepthZoom }
+            }
         } else {
             videoOutput.setSampleBufferDelegate(self, queue: videoQueue)
         }
@@ -964,14 +978,27 @@ final class CameraController: NSObject, ObservableObject {
     }
 
     /// Zoom optique/numérique continu (pincement dans le viseur).
+    /// Quand la livraison de profondeur est configurée, le zoom est borné à
+    /// la plage `videoMin/MaxZoomFactorForDepthDataDelivery` du format :
+    /// hors de cette plage, iOS cesse de livrer la carte de profondeur (ou
+    /// la désaligne du flux vidéo) — le masque devenait faux ou absent dès
+    /// qu'on zoomait avec la pastille Profondeur active.
     func setZoom(_ factor: CGFloat) {
-        let clamped = max(1, min(factor, 8))
-        zoomFactor = clamped
+        let requested = max(1, min(factor, 8))
         sessionQueue.async { [weak self] in
             guard let self, let device = self.videoDevice,
                   (try? device.lockForConfiguration()) != nil else { return }
             defer { device.unlockForConfiguration() }
-            device.videoZoomFactor = min(clamped, device.activeFormat.videoMaxZoomFactor)
+
+            var clamped = min(requested, device.activeFormat.videoMaxZoomFactor)
+            if self.depthConfigured {
+                let format = device.activeFormat
+                let minDepthZoom = format.videoMinZoomFactorForDepthDataDelivery
+                let maxDepthZoom = format.videoMaxZoomFactorForDepthDataDelivery
+                clamped = max(minDepthZoom, min(clamped, maxDepthZoom))
+            }
+            device.videoZoomFactor = clamped
+            DispatchQueue.main.async { self.zoomFactor = clamped }
         }
     }
 
