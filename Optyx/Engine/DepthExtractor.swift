@@ -134,6 +134,33 @@ enum DepthExtractor {
         return DepthRange(min: minValue, max: maxValue)
     }
 
+    /// Remplace NaN/±Inf par 0 dans une carte de disparité Float32
+    /// (0 = « infiniment loin »). Sous la portée minimale du LiDAR
+    /// (~25 cm) ou face à une surface non mesurable, la carte contient
+    /// des NaN MÊME filtrée — quand rien n'est mesurable, le filtrage n'a
+    /// rien à interpoler. Or le comportement de clamp()/min()/max() Metal
+    /// avec NaN n'est pas garanti en fast-math : un seul NaN survivant,
+    /// propagé par les flous du masque, rend l'image entièrement noire
+    /// (mesuré sur appareil : viseur noir permanent, objectif posé contre
+    /// un drap). Le nettoyage CPU est déterministe et coûte ~0,1 ms sur
+    /// une carte 320×240.
+    static func scrubNonFinite(_ buffer: CVPixelBuffer) {
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_DisparityFloat32,
+              let base = CVPixelBufferGetBaseAddress(buffer) else { return }
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+        for y in 0..<height {
+            let row = base.advanced(by: y * rowBytes)
+                .assumingMemoryBound(to: Float32.self)
+            for x in 0..<width where !row[x].isFinite {
+                row[x] = 0
+            }
+        }
+    }
+
     /// Construit le masque à partir d'une plage donnée —
     /// pure chaîne de filtres, sans lecture CPU.
     static func farMask(_ map: CIImage, range: DepthRange, farIsSmall: Bool) -> CIImage {
