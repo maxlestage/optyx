@@ -818,9 +818,10 @@ final class CameraController: NSObject, ObservableObject {
 
     // MARK: - Capture photo
 
-    func capturePhoto() {
+    func capturePhoto(suppressDepth: Bool = false) {
         sessionQueue.async { [weak self] in
             guard let self, self.session.isRunning else { return }
+            self.captureDepthSuppressed = suppressDepth
             self.pendingRawData = nil
             self.pendingProcessedData = nil
             self.pendingDepthData = nil
@@ -855,8 +856,13 @@ final class CameraController: NSObject, ObservableObject {
         let settings = AVCapturePhotoSettings()
         settings.isDepthDataDeliveryEnabled =
             photoOutput.isDepthDataDeliveryEnabled && depthEnabled
+            && !captureDepthSuppressed
         return settings
     }
+
+    /// Une capture avec profondeur qui échoue est retentée UNE fois sans
+    /// profondeur : l'utilisateur ne perd jamais sa photo.
+    private var captureDepthSuppressed = false
 
     // MARK: - Enregistrement vidéo
 
@@ -1211,7 +1217,17 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
             }
         }
 
-        guard error == nil, rawData != nil || processedData != nil else { return }
+        // Échec de la capture avec profondeur (erreur AVFoundation ou
+        // aucune donnée livrée) : on retente UNE fois, sans profondeur —
+        // plutôt une photo sans masque que pas de photo du tout.
+        // L'échec était jusqu'ici silencieux : déclencheur qui « capture »
+        // mais rien dans Photos, uniquement Profondeur active.
+        if error != nil || (rawData == nil && processedData == nil) {
+            if !captureDepthSuppressed, depthEnabled {
+                capturePhoto(suppressDepth: true)
+            }
+            return
+        }
 
         let lens = self.lens
         let intensity = self.intensity
@@ -1233,11 +1249,17 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
                     ciImage = ciImage.map { Self.centerCrop($0, longOverShort: ratio) }
                     mask = mask.map { Self.centerCrop($0, longOverShort: ratio) }
                 }
+                // Si le rendu avec masque de profondeur échoue, on
+                // redéveloppe sans masque : la photo est toujours sauvée.
                 if let ciImage,
                    let rendered = LensEngine.shared.renderUIImage(ciImage,
                                                                   lens: lens,
                                                                   intensity: intensity,
-                                                                  backgroundMask: mask) {
+                                                                  backgroundMask: mask)
+                       ?? LensEngine.shared.renderUIImage(ciImage,
+                                                          lens: lens,
+                                                          intensity: intensity,
+                                                          backgroundMask: nil) {
                     // Format d'export choisi, avec l'EXIF de la capture, la
                     // carte de profondeur embarquée (HEIC/JPEG) et la
                     // distance au sujet mesurée.
@@ -1251,7 +1273,11 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
                         ?? rendered.jpegData(compressionQuality: 0.92)
                 }
             }
-            self?.save(vintage: vintageData, raw: rawData, format: exportFormat)
+            // Ultime filet : si le développement vintage a échoué de bout
+            // en bout, la photo traitée d'origine est enregistrée telle
+            // quelle — on ne perd JAMAIS une prise de vue.
+            self?.save(vintage: vintageData ?? processedData,
+                       raw: rawData, format: exportFormat)
         }
     }
 
