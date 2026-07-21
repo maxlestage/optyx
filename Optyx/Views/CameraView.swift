@@ -517,18 +517,28 @@ struct CameraView: View {
         Button {
             camera.depthEnabled.toggle()
         } label: {
-            Label("Profondeur", systemImage: "person.and.background.dotted")
+            Label(camera.depthMaskPreview ? "Masque" : "Profondeur",
+                  systemImage: "person.and.background.dotted")
                 .font(.caption.weight(.bold))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(
-                    Capsule().fill(camera.depthEnabled
+                    Capsule().fill(camera.depthMaskPreview
+                                   ? Color.purple.opacity(0.9)
+                                   : camera.depthEnabled
                                    ? Color.orange.opacity(0.9)
                                    : Color.white.opacity(0.15))
                 )
-                .foregroundStyle(camera.depthEnabled ? .black : .white)
+                .foregroundStyle(camera.depthEnabled || camera.depthMaskPreview
+                                 ? .black : .white)
         }
         .buttonStyle(.plain)
+        // Diagnostic : appui long = affiche le masque de profondeur brut
+        // en surimpression (blanc = loin/effets, noir = net) — pour voir
+        // exactement ce que le LiDAR fournit au moteur.
+        .onLongPressGesture {
+            camera.depthMaskPreview.toggle()
+        }
     }
 
     /// Active la capture DNG : le fichier RAW original (ProRAW si disponible)

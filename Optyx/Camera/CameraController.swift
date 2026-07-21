@@ -127,6 +127,10 @@ final class CameraController: NSObject, ObservableObject {
     @Published var isFrontCamera = false
     /// Histogramme temps réel affiché dans le viseur.
     @Published var histogramEnabled = true
+    /// Diagnostic : affiche le masque de profondeur brut à la place du
+    /// rendu (blanc = loin/effets, noir = net). Appui long sur la
+    /// pastille Profondeur. Viseur uniquement — jamais dans les fichiers.
+    @Published var depthMaskPreview = false
     /// Dernier histogramme calculé (sur le rendu vintage, pas la scène brute).
     @Published var histogram: HistogramData?
     /// Zébras : hachures sur les zones surexposées (viseur uniquement).
@@ -518,7 +522,19 @@ final class CameraController: NSObject, ObservableObject {
                                          colorSpace: colorSpace)
         // Les aides visuelles (zébras, peaking) ne touchent que l'affichage :
         // le buffer enregistré et les photos restent vierges.
-        previewRenderer.present(assistOverlays(on: CIImage(cvPixelBuffer: buffer)))
+        if depthMaskPreview, let mask = depthMask {
+            // Diagnostic : le masque brut à l'écran (blanc = loin, noir =
+            // net), étiré aux dimensions du viseur. Jamais enregistré.
+            let sx = targetRect.width / max(mask.extent.width, 1)
+            let sy = targetRect.height / max(mask.extent.height, 1)
+            let fitted = mask.transformed(by: CGAffineTransform(
+                a: sx, b: 0, c: 0, d: sy,
+                tx: -mask.extent.minX * sx,
+                ty: -mask.extent.minY * sy)).cropped(to: targetRect)
+            previewRenderer.present(fitted)
+        } else {
+            previewRenderer.present(assistOverlays(on: CIImage(cvPixelBuffer: buffer)))
+        }
 
         // Le même buffer déjà rendu alimente l'enregistrement vidéo :
         // aucun rendu supplémentaire.
