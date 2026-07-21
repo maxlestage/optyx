@@ -35,25 +35,32 @@ final class LensEngine {
         let dim = min(extent.width, extent.height)
         let center = CGPoint(x: extent.midX, y: extent.midY)
         let depthMask = backgroundMask.map { fitMask($0, to: extent) }
+        // Masque des effets gradués : plancher à 30 % — la profondeur
+        // MODULE les effets (30 % sur le sujet proche, 100 % au loin),
+        // elle ne les coupe plus. Sans plancher, une scène entièrement
+        // proche (chambre, draps) éteignait tourbillon, bulles, douceur
+        // et franges : « ça ne fait pas les effets ». Le glow et le
+        // vignettage gardent leurs propres planchers sur le masque brut.
+        let effectMask = depthMask.map { boosted($0, floor: 0.3) }
         // Bandes de distance calculées UNE fois par trame et partagées :
         // chaque effet gradué qui recalculait les siennes produisait des
         // sous-graphes identiques mais distincts, que Core Image ne peut
         // pas fusionner — travail triplé pour rien.
-        let bands = depthMask.map { depthBands($0) }
+        let bands = effectMask.map { depthBands($0) }
         var img = input
 
         img = applyTone(img, lens: lens, k: k)
         img = applyWarmth(img, lens: lens, k: k)
         img = applySwirl(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
-                         customMask: depthMask, bands: bands)
+                         customMask: effectMask, bands: bands)
         img = applyEdgeSoftness(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
-                                customMask: depthMask)
+                                customMask: effectMask)
         img = applyBubbleBokeh(img, lens: lens, k: k, extent: extent, dim: dim,
-                               customMask: depthMask, bands: bands)
+                               customMask: effectMask, bands: bands)
         img = applyGlow(img, lens: lens, k: k, dim: dim, extent: extent,
                         customMask: depthMask)
         img = applyChromaticAberration(img, lens: lens, k: k, extent: extent, center: center,
-                                       customMask: depthMask, bands: bands)
+                                       customMask: effectMask, bands: bands)
         img = applyVignette(img, lens: lens, k: k, center: center, dim: dim,
                             extent: extent, customMask: depthMask)
         img = applyGrain(img, lens: lens, k: k, extent: extent)
