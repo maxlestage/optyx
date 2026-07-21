@@ -444,6 +444,10 @@ final class CameraController: NSObject, ObservableObject {
         if photoOutput.isDepthDataDeliverySupported {
             photoOutput.isDepthDataDeliveryEnabled = true
         }
+        // Autorise la priorité qualité maximale (Deep Fusion) demandée par
+        // makePhotoSettings — le plafond par défaut est .balanced, et une
+        // demande au-dessus du plafond lève une exception.
+        photoOutput.maxPhotoQualityPrioritization = .quality
         let rawTypes = photoOutput.availableRawPhotoPixelFormatTypes
         let hasProRAW = rawTypes.contains(where: AVCapturePhotoOutput.isAppleProRAWPixelFormat)
         let hasDepth = depthConfigured
@@ -857,6 +861,12 @@ final class CameraController: NSObject, ObservableObject {
         settings.isDepthDataDeliveryEnabled =
             photoOutput.isDepthDataDeliveryEnabled && depthEnabled
             && !captureDepthSuppressed
+        // Qualité maximale (Deep Fusion / fusion longue) : décisif en basse
+        // lumière — la base du rendu vintage n'est plus une bouillie ISO
+        // 1000. Ignoré pendant une rafale, où la cadence prime.
+        if burstCountRemaining == 0 {
+            settings.photoQualityPrioritization = .quality
+        }
         return settings
     }
 
