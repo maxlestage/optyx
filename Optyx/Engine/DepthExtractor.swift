@@ -56,6 +56,62 @@ enum DepthExtractor {
     /// les effets dans la quasi-totalité des scènes en intérieur.
     static let liveAbsoluteRange = DepthRange(min: 0.45, max: 1.15)
 
+    /// Masque d'arrière-plan en étalonnage absolu (photos capturées), ou
+    /// nil si la scène n'a aucun arrière-plan mesurable : un masque quasi
+    /// vide appliqué tel quel éteindrait les effets gradués sur TOUTE
+    /// l'image — mieux vaut pas de masque, le rendu repasse au masque
+    /// radial et la signature de l'objectif reste visible. Lecture
+    /// GPU→CPU d'un pixel : à réserver aux files d'arrière-plan.
+    static func absoluteFarMask(_ map: CIImage,
+                                context: CIContext = LensEngine.shared.context) -> CIImage? {
+        let mask = farMask(map, range: liveAbsoluteRange, farIsSmall: true)
+        if let coverage = averageLuminance(of: mask, context: context), coverage < 0.06 {
+            return nil
+        }
+        return mask
+    }
+
+    /// Aligne un masque extrait des données auxiliaires sur l'image
+    /// affichée. Deux défauts réels des fichiers rencontrés :
+    /// 1. Les exports d'Optyx (et d'autres apps) embarquent la carte en
+    ///    orientation CAPTEUR (paysage) alors que les pixels de l'image
+    ///    sont déjà redressés (portrait, orientation EXIF 1) — le masque
+    ///    arrivait pivoté de 90° et les effets s'appliquaient sur le
+    ///    mauvais axe : « l'édition ne marche pas ».
+    /// 2. Les cadrages 3:2 / 16:9 / XPan sont des recadrages centrés du
+    ///    capteur, mais la carte embarquée reste pleine trame : l'étirer
+    ///    aux dimensions de l'image décale le masque — il faut lui
+    ///    appliquer le même recadrage centré.
+    static func aligned(_ mask: CIImage, with imageSize: CGSize) -> CIImage {
+        guard imageSize.width > 0, imageSize.height > 0,
+              !mask.extent.isEmpty, !mask.extent.isInfinite else { return mask }
+        var out = mask
+        let maskPortrait = out.extent.height > out.extent.width
+        let imagePortrait = imageSize.height > imageSize.width
+        if maskPortrait != imagePortrait,
+           abs(out.extent.height - out.extent.width) > 1,
+           abs(imageSize.height - imageSize.width) > 1 {
+            // Rotation standard capteur → portrait des iPhone.
+            out = out.oriented(.right)
+        }
+        let extent = out.extent
+        let targetRatio = imageSize.width / imageSize.height
+        let ratio = extent.width / extent.height
+        if abs(ratio - targetRatio) > 0.01 {
+            var width = extent.width
+            var height = extent.height
+            if ratio > targetRatio {
+                width = extent.height * targetRatio
+            } else {
+                height = extent.width / targetRatio
+            }
+            out = out.cropped(to: CGRect(x: extent.midX - width / 2,
+                                         y: extent.midY - height / 2,
+                                         width: width, height: height))
+        }
+        return out
+    }
+
     /// Normalise une carte de profondeur/disparité en masque 0…1 où
     /// l'arrière-plan (loin) tend vers le blanc.
     static func normalizedFarMask(_ map: CIImage, farIsSmall: Bool) -> CIImage? {

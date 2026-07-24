@@ -1,0 +1,60 @@
+name: CI
+
+# CI complète du projet : compilation de l'app iOS sur simulateur
+# (sans signature — aucun certificat requis sur les runners GitHub),
+# puis merge automatique de la pull request quand le build est vert.
+# La CI ne modifie JAMAIS le projet : pas de bump de version
+# (MARKETING_VERSION / CURRENT_PROJECT_VERSION restent tels quels),
+# aucun commit généré. La livraison TestFlight reste du ressort
+# de Xcode Cloud (voir ci_scripts/).
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  build:
+    name: Build iOS (simulateur)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sélectionner le Xcode le plus récent du runner
+        run: |
+          XCODE="$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)"
+          echo "Xcode sélectionné : $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - name: Compiler Optyx (Debug, iphonesimulator, sans signature)
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Optyx.xcodeproj \
+            -target Optyx \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            ONLY_ACTIVE_ARCH=NO
+
+  automerge:
+    name: Merge automatique
+    needs: build
+    # Uniquement les PR du dépôt lui-même (jamais un fork) : le build
+    # vert vaut validation, la PR est mergée sans intervention.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merger la pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr merge "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" --merge

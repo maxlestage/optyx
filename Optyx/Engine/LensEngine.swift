@@ -35,13 +35,16 @@ final class LensEngine {
         let dim = min(extent.width, extent.height)
         let center = CGPoint(x: extent.midX, y: extent.midY)
         let depthMask = backgroundMask.map { fitMask($0, to: extent) }
-        // Masque des effets gradués : plancher à 30 % — la profondeur
-        // MODULE les effets (30 % sur le sujet proche, 100 % au loin),
-        // elle ne les coupe plus. Sans plancher, une scène entièrement
-        // proche (chambre, draps) éteignait tourbillon, bulles, douceur
-        // et franges : « ça ne fait pas les effets ». Le glow et le
-        // vignettage gardent leurs propres planchers sur le masque brut.
-        let effectMask = depthMask.map { boosted($0, floor: 0.3) }
+        // Masque des effets gradués : le sujet reste rigoureusement NET
+        // (masque à 0). L'ancien plancher de 30 % faisait subir au sujet
+        // 30 % de tourbillon, de flou et de franges — visage dédoublé dès
+        // que la profondeur était active, dans le viseur comme au Studio.
+        // Le cas « scène entièrement proche → plus aucun effet » est géré
+        // en amont : un masque à couverture quasi nulle n'est plus fourni
+        // au moteur (repli sur le masque radial), la signature de
+        // l'objectif reste donc toujours visible. Le glow et le vignettage
+        // gardent leurs planchers (effets de lumière, pas de géométrie).
+        let effectMask = depthMask
         // Bandes de distance calculées UNE fois par trame et partagées :
         // chaque effet gradué qui recalculait les siennes produisait des
         // sous-graphes identiques mais distincts, que Core Image ne peut

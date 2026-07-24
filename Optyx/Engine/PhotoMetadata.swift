@@ -65,10 +65,14 @@ enum PhotoMetadata {
     ///
     /// `depthData` vient d'une capture caméra ; s'il est nil, les données
     /// auxiliaires (matte portrait, disparité, profondeur) sont recopiées
-    /// depuis `originalData` (cas du Studio).
+    /// depuis `originalData` (cas du Studio). `depthOrientation` est la
+    /// rotation capteur → image affichée : la carte est embarquée REDRESSÉE
+    /// pour correspondre aux pixels rendus (orientation EXIF 1) — sans
+    /// cela, le masque relu au Studio ou dans Photos arrivait pivoté de 90°.
     static func vintageImageData(rendered: UIImage,
                                  originalData: Data?,
                                  depthData: AVDepthData?,
+                                 depthOrientation: CGImagePropertyOrientation? = nil,
                                  lens: LensProfile,
                                  intensity: Double,
                                  format: ExportFormat = .heic) -> Data? {
@@ -111,9 +115,12 @@ enum PhotoMetadata {
         if !format.supportsDepthData {
             // PNG/TIFF : pas de cartes auxiliaires (métadonnées EXIF seules).
         } else if let depthData {
-            // Capture caméra : profondeur AVFoundation embarquée telle quelle.
+            // Capture caméra : profondeur redressée à l'orientation des
+            // pixels rendus avant d'être embarquée.
+            let upright = depthOrientation.map { depthData.applyingExifOrientation($0) }
+                ?? depthData
             var auxTypeOut: NSString?
-            if let auxDict = depthData.dictionaryRepresentation(forAuxiliaryDataType: &auxTypeOut),
+            if let auxDict = upright.dictionaryRepresentation(forAuxiliaryDataType: &auxTypeOut),
                let auxTypeOut {
                 CGImageDestinationAddAuxiliaryDataInfo(destination, auxTypeOut as CFString,
                                                        auxDict as CFDictionary)

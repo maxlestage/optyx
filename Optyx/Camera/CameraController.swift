@@ -173,6 +173,17 @@ final class CameraController: NSObject, ObservableObject {
     private let analysisContext = CIContext(options: [.cacheIntermediates: false])
     /// Analyses en cours, pour ne pas empiler (confinés à `videoQueue`).
     private var histogramInFlight = false
+    /// Couverture du masque de profondeur en direct (confinés à `videoQueue`).
+    /// Un masque quasi vide (sujet ou surface qui remplit le cadre, aucun
+    /// arrière-plan mesurable) appliqué tel quel éteindrait TOUS les effets
+    /// gradués — « aucun objectif ne fait rien ». La couverture est mesurée
+    /// périodiquement sur la file d'analyse ; sous le seuil, le masque est
+    /// supprimé (repli sur le masque radial) avec une hystérésis pour
+    /// qu'une scène à la limite ne fasse pas clignoter les effets.
+    private var depthCoverageFrameCounter = 0
+    private let depthCoverageInterval = 15
+    private var depthCoverageInFlight = false
+    private var depthMaskSuppressed = false
     /// Sortie de profondeur configurée sur la session courante
     /// (confiné à `sessionQueue`) — pilote le bornage du zoom.
     private var depthConfigured = false
@@ -729,17 +740,33 @@ final class CameraController: NSObject, ObservableObject {
     }
 
     /// Convertit une carte de profondeur AVFoundation en masque
-    /// d'arrière-plan (blanc = loin) orienté comme la prévisualisation.
-    /// Même étalonnage absolu que le viseur : la photo capturée rend
-    /// exactement ce que le viseur montrait.
+    /// d'arrière-plan (blanc = loin) orienté comme la photo capturée.
+    /// Même étalonnage absolu que le viseur, même filet : masque quasi
+    /// vide (aucun arrière-plan mesurable) → nil, le rendu repasse au
+    /// masque radial et la photo garde la signature de l'objectif.
     private static func backgroundMask(from depthData: AVDepthData,
                                        orientation: CGImagePropertyOrientation) -> CIImage? {
         let disparity = depthData.converting(
             toDepthDataType: kCVPixelFormatType_DisparityFloat32)
         DepthExtractor.scrubNonFinite(disparity.depthDataMap)
-        let map = CIImage(cvPixelBuffer: disparity.depthDataMap).oriented(orientation)
-        return DepthExtractor.farMask(map, range: DepthExtractor.liveAbsoluteRange,
-                                      farIsSmall: true)
+        let map = CIImage(cvPixelBuffer: disparity.depthDataMap)
+            .oriented(unmirrored(orientation))
+        return DepthExtractor.absoluteFarMask(map)
+    }
+
+    /// Orientation débarrassée de son miroir. Le viseur selfie est affiché
+    /// en miroir, mais la photo capturée par iOS ne l'est PAS : un masque
+    /// miroité appliquait les effets du mauvais côté de l'image avec la
+    /// caméra frontale (TrueDepth — qui fournit toujours la profondeur).
+    private static func unmirrored(_ orientation: CGImagePropertyOrientation)
+        -> CGImagePropertyOrientation {
+        switch orientation {
+        case .upMirrored: return .up
+        case .downMirrored: return .down
+        case .leftMirrored: return .left
+        case .rightMirrored: return .right
+        default: return orientation
+        }
     }
 
     /// Version pour le flux direct : réutilise la plage min/max mise en
@@ -758,11 +785,12 @@ final class CameraController: NSObject, ObservableObject {
 
         // Étalonnage ABSOLU : la disparité est en 1/mètres, le masque suit
         // la vraie distance mesurée par le LiDAR / double capteur — net en
-        // deçà de ~0,9 m, effet plein au-delà de ~3,3 m, quelle que soit
-        // la composition de la scène. Plus aucune mesure de plage, aucun
+        // deçà de ~0,87 m, effet plein dès ~2,2 m, quelle que soit la
+        // composition de la scène. Plus aucune mesure de plage, aucun
         // cache, aucun lissage : des constantes fixes ne peuvent pas
-        // osciller. Quand la pastille Profondeur est active, ce masque
-        // fait TOUTE la loi — pas de repli radial.
+        // osciller. Seul filet : le délégué du synchroniseur mesure la
+        // couverture du masque et le supprime (repli radial) quand la
+        // scène n'a aucun arrière-plan mesurable.
         return DepthExtractor.farMask(map, range: DepthExtractor.liveAbsoluteRange,
                                       farIsSmall: true)
     }
@@ -1171,6 +1199,37 @@ extension CameraController: AVCaptureDataOutputSynchronizerDelegate {
             depthMask = liveBackgroundMask(from: syncedDepth.depthData)
         }
 
+        // Couverture du masque mesurée périodiquement hors du chemin des
+        // trames : scène sans arrière-plan mesurable (masque quasi noir)
+        // → masque supprimé, le rendu repasse au masque radial et les
+        // effets restent visibles. Hystérésis : suppression sous 5 %,
+        // retour au-dessus de 9 %.
+        if let mask = depthMask {
+            depthCoverageFrameCounter += 1
+            if depthCoverageFrameCounter % depthCoverageInterval == 0,
+               !depthCoverageInFlight {
+                depthCoverageInFlight = true
+                analysisQueue.async { [weak self] in
+                    guard let self else { return }
+                    let coverage = DepthExtractor.averageLuminance(
+                        of: mask, context: self.analysisContext) ?? 0
+                    self.videoQueue.async {
+                        if self.depthMaskSuppressed {
+                            if coverage > 0.09 { self.depthMaskSuppressed = false }
+                        } else if coverage < 0.05 {
+                            self.depthMaskSuppressed = true
+                        }
+                        self.depthCoverageInFlight = false
+                    }
+                }
+            }
+            // Le diagnostic (appui long sur la pastille) montre toujours
+            // le masque brut, même supprimé pour le rendu.
+            if depthMaskSuppressed && !depthMaskPreview {
+                depthMask = nil
+            }
+        }
+
         processVideoFrame(syncedVideo.sampleBuffer, depthMask: depthMask)
     }
 }
@@ -1249,6 +1308,10 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
             // Le rendu vintage est "développé" à partir de la version traitée ;
             // le DNG reste, par définition, les données brutes du capteur.
             var vintageData: Data?
+            // Type réel des données développées : déclarer un UTI qui ne
+            // correspond pas aux octets (JPEG de repli étiqueté HEIC/PNG)
+            // faisait échouer l'enregistrement dans Photos — photo perdue.
+            var vintageType: UTType?
             if let processedData, let source = UIImage(data: processedData) {
                 var mask = depthData.flatMap {
                     Self.backgroundMask(from: $0, orientation: orientation)
@@ -1272,28 +1335,42 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
                                                           backgroundMask: nil) {
                     // Format d'export choisi, avec l'EXIF de la capture, la
                     // carte de profondeur embarquée (HEIC/JPEG) et la
-                    // distance au sujet mesurée.
-                    vintageData = PhotoMetadata.vintageImageData(
+                    // distance au sujet mesurée. La carte est redressée à
+                    // l'orientation de l'image : embarquée en orientation
+                    // capteur (paysage) alors que les pixels sont déjà
+                    // droits, elle rendait la photo inéditable — masque
+                    // pivoté de 90° au Studio comme dans Photos.
+                    if let embedded = PhotoMetadata.vintageImageData(
                         rendered: rendered,
                         originalData: processedData,
                         depthData: depthData,
+                        depthOrientation: Self.unmirrored(orientation),
                         lens: lens,
                         intensity: intensity,
-                        format: exportFormat)
-                        ?? rendered.jpegData(compressionQuality: 0.92)
+                        format: exportFormat) {
+                        vintageData = embedded
+                        vintageType = exportFormat.utType
+                    } else {
+                        vintageData = rendered.jpegData(compressionQuality: 0.92)
+                        vintageType = .jpeg
+                    }
                 }
             }
             // Ultime filet : si le développement vintage a échoué de bout
             // en bout, la photo traitée d'origine est enregistrée telle
-            // quelle — on ne perd JAMAIS une prise de vue.
+            // quelle — on ne perd JAMAIS une prise de vue. Son type est
+            // laissé à Photos (les octets viennent du codec de la caméra,
+            // pas du format d'export choisi).
+            if vintageData == nil { vintageType = nil }
             self?.save(vintage: vintageData ?? processedData,
-                       raw: rawData, format: exportFormat)
+                       vintageType: vintageType, raw: rawData)
         }
     }
 
     /// Enregistre dans Photos : le rendu vintage comme image principale,
     /// le DNG original attaché en ressource alternative (badge RAW dans Photos).
-    private func save(vintage: Data?, raw: Data?, format: ExportFormat) {
+    /// `vintageType` nil = laisser Photos détecter le type depuis les octets.
+    private func save(vintage: Data?, vintageType: UTType?, raw: Data?) {
         guard vintage != nil || raw != nil else { return }
         PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] authStatus in
             guard authStatus == .authorized || authStatus == .limited else { return }
@@ -1302,7 +1379,9 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
                 let rawOptions = PHAssetResourceCreationOptions()
                 rawOptions.originalFilename = "Optyx.dng"
                 let vintageOptions = PHAssetResourceCreationOptions()
-                vintageOptions.uniformTypeIdentifier = format.utType.identifier
+                if let vintageType {
+                    vintageOptions.uniformTypeIdentifier = vintageType.identifier
+                }
                 if let vintage {
                     request.addResource(with: .photo, data: vintage, options: vintageOptions)
                     if let raw {
