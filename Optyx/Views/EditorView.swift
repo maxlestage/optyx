@@ -181,8 +181,15 @@ struct EditorView: View {
         Task {
             guard let data = try? await item.loadTransferable(type: Data.self),
                   let image = await decode(data) else { return }
+            // Le masque est ALIGNÉ sur l'image affichée : certaines photos
+            // (exports d'Optyx notamment) embarquent leur carte en
+            // orientation capteur et pleine trame — sans rotation ni
+            // recadrage centré, le masque arrivait pivoté ou décalé et
+            // l'édition partait dans le mauvais axe.
+            let imageSize = image.size
             let mask = await Task.detached(priority: .userInitiated) {
                 DepthExtractor.backgroundMask(from: data)
+                    .map { DepthExtractor.aligned($0, with: imageSize) }
             }.value
             fullResolution = image.normalized(maxDimension: 3200)
             original = image.normalized(maxDimension: 1200)
@@ -231,18 +238,26 @@ struct EditorView: View {
         Task.detached(priority: .userInitiated) {
             // Export au format choisi, avec l'EXIF d'origine et les cartes
             // auxiliaires (profondeur, matte portrait) recopiées (HEIC/JPEG).
+            // Le type déclaré à Photos suit les octets réellement produits :
+            // un JPEG de repli étiqueté HEIC/PNG faisait échouer
+            // l'enregistrement — « Enregistrer » ne faisait rien.
             var exportData: Data?
+            var exportType = format.utType
             if let result = LensEngine.shared.renderUIImage(input, lens: lens,
                                                             intensity: intensity,
                                                             backgroundMask: mask) {
-                exportData = PhotoMetadata.vintageImageData(
+                if let embedded = PhotoMetadata.vintageImageData(
                     rendered: result,
                     originalData: sourceData,
                     depthData: nil,
                     lens: lens,
                     intensity: intensity,
-                    format: format)
-                    ?? result.jpegData(compressionQuality: 0.92)
+                    format: format) {
+                    exportData = embedded
+                } else {
+                    exportData = result.jpegData(compressionQuality: 0.92)
+                    exportType = .jpeg
+                }
             }
             guard let exportData else {
                 await MainActor.run { isSaving = false }
@@ -255,7 +270,7 @@ struct EditorView: View {
                 }
                 PHPhotoLibrary.shared().performChanges {
                     let options = PHAssetResourceCreationOptions()
-                    options.uniformTypeIdentifier = format.utType.identifier
+                    options.uniformTypeIdentifier = exportType.identifier
                     PHAssetCreationRequest.forAsset()
                         .addResource(with: .photo, data: exportData, options: options)
                 } completionHandler: { success, _ in
