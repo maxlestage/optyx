@@ -355,29 +355,31 @@ final class LensEngine {
                            customMask: CIImage? = nil) -> CIImage {
         let strength = lens.glow * k
         guard strength > 0.02 else { return img }
-        // Avec un masque de profondeur, le bloom est alimenté par l'image
-        // dont le sujet est éteint (multiplication par le masque) : sinon,
-        // les hautes lumières du sujet (chemise blanche, visage) débordent
-        // en halo blanc collé à la silhouette — le défaut le plus visible
-        // sur les photos Portrait, identique quel que soit l'objectif.
+        // Le halo naît des HAUTES LUMIÈRES seulement. Donner l'image
+        // entière à CIBloom (et la remplacer par sa version bloomée)
+        // noyait toute la photo sous un voile laiteux dès que le glow
+        // montait (Dream Lens, Noctilux) : brouillard blanc sur tout le
+        // cadre, plus aucun détail visible. Désormais : extraction des
+        // tons clairs, bloom de ces tons seuls, et incrustation écran du
+        // halo par-dessus l'image INTACTE — le glow entoure les lumières
+        // (halation), il ne voile plus l'image.
+        // Avec un masque de profondeur, les hautes lumières du sujet
+        // (chemise blanche, visage) sont éteintes avant le bloom : pas de
+        // halo collé à la silhouette ; le halo du fond est pondéré par le
+        // masque.
         let source = customMask.map { multiplied(img, $0) } ?? img
+        let highlights = ramp(source, from: 0.62, to: 0.95)
         let bloom = CIFilter.bloom()
-        bloom.inputImage = source.clampedToExtent()
-        // Le glow éclaire, il n'assombrit pas : renforcer sa présence va
-        // dans le sens d'une image lumineuse (le halo de silhouette est
-        // déjà neutralisé par la source masquée).
+        bloom.inputImage = highlights.clampedToExtent()
         bloom.intensity = Float(1.35 * strength)
         bloom.radius = Float(dim * 0.02 * (0.5 + strength))
-        guard let bloomed = bloom.outputImage?.cropped(to: extent) else { return img }
+        guard let halo = bloom.outputImage?.cropped(to: extent) else { return img }
 
-        guard let customMask else { return bloomed }
-        // Le bloom du fond est réincrusté en mode écran : l'image garde sa
-        // luminosité d'origine partout (le sujet n'est pas assombri par la
-        // source éteinte), seul le halo du fond s'ajoute.
+        let weighted = customMask.map {
+            multiplied(halo, boosted($0, floor: 0.35)).cropped(to: extent)
+        } ?? halo
         let screen = CIFilter.screenBlendMode()
-        screen.inputImage = multiplied(subtracted(bloomed, minus: source),
-                                       boosted(customMask, floor: 0.35))
-            .cropped(to: extent)
+        screen.inputImage = weighted
         screen.backgroundImage = img
         return screen.outputImage ?? img
     }
@@ -599,32 +601,6 @@ final class LensEngine {
         multiply.inputImage = a
         multiply.backgroundImage = b
         return multiply.outputImage ?? a
-    }
-
-    /// Différence bornée `a − b` (canaux RVB, alpha ramené à 1).
-    /// Sert à isoler le halo pur d'un bloom : bloom(source) − source.
-    /// L'espace de travail de Core Image (flottant) tolère les valeurs
-    /// négatives intermédiaires ; le clamp final les élimine.
-    private func subtracted(_ a: CIImage, minus b: CIImage) -> CIImage {
-        let negative = CIFilter.colorMatrix()
-        negative.inputImage = b
-        negative.rVector = CIVector(x: -1, y: 0, z: 0, w: 0)
-        negative.gVector = CIVector(x: 0, y: -1, z: 0, w: 0)
-        negative.bVector = CIVector(x: 0, y: 0, z: -1, w: 0)
-        negative.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
-        negative.biasVector = CIVector(x: 0, y: 0, z: 0, w: 1)
-        guard let neg = negative.outputImage else { return a }
-
-        let add = CIFilter.additionCompositing()
-        add.inputImage = a
-        add.backgroundImage = neg
-        guard let sum = add.outputImage else { return a }
-
-        let clamp = CIFilter.colorClamp()
-        clamp.inputImage = sum
-        clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
-        clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
-        return clamp.outputImage ?? sum
     }
 
     /// Redimensionne un masque (ex. carte de profondeur, résolution réduite)
