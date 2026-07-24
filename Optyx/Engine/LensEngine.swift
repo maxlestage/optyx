@@ -35,16 +35,21 @@ final class LensEngine {
         let dim = min(extent.width, extent.height)
         let center = CGPoint(x: extent.midX, y: extent.midY)
         let depthMask = backgroundMask.map { fitMask($0, to: extent) }
-        // Masque des effets gradués : le sujet reste rigoureusement NET
-        // (masque à 0). L'ancien plancher de 30 % faisait subir au sujet
-        // 30 % de tourbillon, de flou et de franges — visage dédoublé dès
-        // que la profondeur était active, dans le viseur comme au Studio.
-        // Le cas « scène entièrement proche → plus aucun effet » est géré
-        // en amont : un masque à couverture quasi nulle n'est plus fourni
-        // au moteur (repli sur le masque radial), la signature de
-        // l'objectif reste donc toujours visible. Le glow et le vignettage
-        // gardent leurs planchers (effets de lumière, pas de géométrie).
-        let effectMask = depthMask
+        // Masque des effets gradués : profondeur ∪ champ. Les aberrations
+        // d'un vrai objectif (tourbillon, douceur, franges, bulles) sont
+        // des effets de CHAMP : elles frappent les bords du cadre quelle
+        // que soit la distance du sujet. Le masque de profondeur seul les
+        // éteignait dès que la scène entière était proche (lit, selfie :
+        // tout sous ~1 m → masque noir partout, « aucun objectif ne fait
+        // rien »), car le garde-fou amont ne coupe le masque que sous 6 %
+        // de couverture. L'union avec le masque radial garantit la
+        // signature aux bords dans TOUTES les scènes ; la profondeur
+        // continue de graduer l'arrière-plan et le centre du cadre — le
+        // sujet — reste net (masque à 0 des deux côtés).
+        let effectMask = depthMask.map { mask in
+            maxed(mask, radialMask(extent: extent, center: center,
+                                   inner: dim * 0.22, outer: dim * 0.62))
+        }
         // Bandes de distance calculées UNE fois par trame et partagées :
         // chaque effet gradué qui recalculait les siennes produisait des
         // sous-graphes identiques mais distincts, que Core Image ne peut
@@ -60,8 +65,10 @@ final class LensEngine {
                                 customMask: effectMask)
         img = applyBubbleBokeh(img, lens: lens, k: k, extent: extent, dim: dim,
                                customMask: effectMask, bands: bands)
+        // Le glow reçoit lui aussi l'union : gater le halo par la seule
+        // profondeur l'éteignait entièrement dans les scènes proches.
         img = applyGlow(img, lens: lens, k: k, dim: dim, extent: extent,
-                        customMask: depthMask)
+                        customMask: effectMask)
         img = applyChromaticAberration(img, lens: lens, k: k, extent: extent, center: center,
                                        customMask: effectMask, bands: bands)
         img = applyVignette(img, lens: lens, k: k, center: center, dim: dim,
@@ -166,12 +173,12 @@ final class LensEngine {
 
         /// Copie tourbillonnée pour une amplitude donnée (1 = nominale).
         func swirledLayer(amplitude: Double) -> CIImage? {
-            // 0.22 rad : la rotation moyenne est géométriquement nulle au
-            // centre du cadre (sujet, horizon) — une amplitude timide rend
-            // le tourbillon invisible partout sauf dans les coins, que le
-            // vignettage recouvre. Le flou tangentiel accru fusionne les
-            // copies discrètes aux bords.
-            let maxAngle = 0.22 * strength * amplitude
+            // 0.30 rad (~17°) : la rotation moyenne est géométriquement
+            // nulle au centre du cadre (sujet, horizon) — une amplitude
+            // timide rend le tourbillon invisible partout sauf dans les
+            // coins, que le vignettage recouvre. Le flou tangentiel accru
+            // fusionne les copies discrètes aux bords.
+            let maxAngle = 0.30 * strength * amplitude
             var accumulated: CIImage?
             for offset in offsets {
                 let angle = CGFloat(offset * maxAngle)
@@ -290,7 +297,9 @@ final class LensEngine {
         // bulles, anneaux plus grands — la signature Trioplan se voit.
         let threshold = CIFilter.colorThreshold()
         threshold.inputImage = gray
-        threshold.threshold = 0.60
+        // Seuil abaissé pour que les scènes d'intérieur (lampes, reflets)
+        // fournissent encore des sources de bulles.
+        threshold.threshold = 0.55
         guard let highlights = threshold.outputImage else { return img }
 
         let baseRadius = Float(max(8, dim * 0.034))
@@ -369,7 +378,10 @@ final class LensEngine {
         // halo collé à la silhouette ; le halo du fond est pondéré par le
         // masque.
         let source = customMask.map { multiplied(img, $0) } ?? img
-        let highlights = ramp(source, from: 0.62, to: 0.95)
+        // Seuil abaissé : dans une pièce sombre, quasi aucun pixel ne
+        // dépasse 0,62 — le halo n'existait que dans les scènes très
+        // lumineuses. À 0,50, une lampe ou une fenêtre suffisent.
+        let highlights = ramp(source, from: 0.50, to: 0.92)
         let bloom = CIFilter.bloom()
         bloom.inputImage = highlights.clampedToExtent()
         bloom.intensity = Float(1.9 * strength)
@@ -596,6 +608,14 @@ final class LensEngine {
         matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
         matrix.biasVector = CIVector(x: floor, y: floor, z: floor, w: 1)
         return matrix.outputImage ?? mask
+    }
+
+    /// Union de deux masques : maximum pixel à pixel.
+    private func maxed(_ a: CIImage, _ b: CIImage) -> CIImage {
+        let filter = CIFilter.maximumCompositing()
+        filter.inputImage = a
+        filter.backgroundImage = b
+        return filter.outputImage ?? a
     }
 
     private func multiplied(_ a: CIImage, _ b: CIImage) -> CIImage {
