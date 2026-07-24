@@ -86,28 +86,28 @@ final class LensEngine {
     private func applyTone(_ img: CIImage, lens: LensProfile, k: Double) -> CIImage {
         var out = img
 
-        // Image PLUS CLAIRE : léger gain d'exposition global (+0,25 EV à
-        // pleine intensité). Le rendu vintage tirait l'ensemble vers le
-        // sombre (vignettage + voile + douceur) — les photos sortaient
-        // ternes et éteintes ; on repart d'une base lumineuse.
+        // Image PLUS CLAIRE : gain d'exposition global (+0,4 EV à pleine
+        // intensité). Le rendu vintage tirait l'ensemble vers le sombre
+        // (vignettage + voile + douceur) — les photos sortaient ternes et
+        // éteintes ; on repart d'une base lumineuse.
         let exposure = CIFilter.exposureAdjust()
         exposure.inputImage = out
-        exposure.ev = Float(0.25 * k)
+        exposure.ev = Float(0.40 * k)
         out = exposure.outputImage ?? out
 
         // Lumière naturelle : le voile vintage reste une nuance, pas un
-        // filtre gris — perte de contraste et noirs levés divisés par
-        // deux ; l'exposition et les couleurs de la photo sont préservées,
-        // le caractère vient des effets optiques.
+        // filtre gris — perte de contraste et noirs levés réduits au
+        // minimum ; l'exposition et les couleurs de la photo sont
+        // préservées, le caractère vient des effets optiques.
         let controls = CIFilter.colorControls()
         controls.inputImage = out
-        controls.contrast = Float(1.0 - 0.06 * lens.fade * k)
+        controls.contrast = Float(1.0 - 0.04 * lens.fade * k)
         controls.saturation = Float(1.0 + (lens.saturation - 1.0) * k)
         controls.brightness = 0
         out = controls.outputImage ?? out
 
         if lens.fade > 0.01 {
-            let lift = CGFloat(0.02 * lens.fade * k)
+            let lift = CGFloat(0.015 * lens.fade * k)
             let poly = CIFilter.colorPolynomial()
             poly.inputImage = out
             let coeff = CIVector(x: lift, y: 1 - lift, z: 0, w: 0)
@@ -123,12 +123,13 @@ final class LensEngine {
     /// Dérive chaude (verre au thorium, traitements anciens).
     private func applyWarmth(_ img: CIImage, lens: LensProfile, k: Double) -> CIImage {
         guard lens.warmth > 0.01 else { return img }
-        // Dérive contenue : la chaleur du thorium doit se sentir sans
-        // orangir toute la photo — la lumière reste naturelle.
+        // Dérive dorée AFFIRMÉE : la chaleur du thorium est la signature du
+        // Takumar — elle doit se voir au premier coup d'œil, sans virer au
+        // filtre orange uniforme.
         let filter = CIFilter.temperatureAndTint()
         filter.inputImage = img
         filter.neutral = CIVector(x: 6500, y: 0)
-        filter.targetNeutral = CIVector(x: 6500 + 900 * lens.warmth * k, y: 1.5 * lens.warmth * k)
+        filter.targetNeutral = CIVector(x: 6500 + 1500 * lens.warmth * k, y: 2.5 * lens.warmth * k)
         return filter.outputImage ?? img
     }
 
@@ -165,12 +166,12 @@ final class LensEngine {
 
         /// Copie tourbillonnée pour une amplitude donnée (1 = nominale).
         func swirledLayer(amplitude: Double) -> CIImage? {
-            // 0.09 rad : la rotation moyenne est géométriquement nulle au
+            // 0.22 rad : la rotation moyenne est géométriquement nulle au
             // centre du cadre (sujet, horizon) — une amplitude timide rend
             // le tourbillon invisible partout sauf dans les coins, que le
             // vignettage recouvre. Le flou tangentiel accru fusionne les
             // copies discrètes aux bords.
-            let maxAngle = 0.16 * strength * amplitude
+            let maxAngle = 0.22 * strength * amplitude
             var accumulated: CIImage?
             for offset in offsets {
                 let angle = CGFloat(offset * maxAngle)
@@ -289,10 +290,10 @@ final class LensEngine {
         // bulles, anneaux plus grands — la signature Trioplan se voit.
         let threshold = CIFilter.colorThreshold()
         threshold.inputImage = gray
-        threshold.threshold = 0.66
+        threshold.threshold = 0.60
         guard let highlights = threshold.outputImage else { return img }
 
-        let baseRadius = Float(max(7, dim * 0.028))
+        let baseRadius = Float(max(8, dim * 0.034))
 
         /// Anneaux construits à partir des hautes lumières pour un diamètre donné.
         func ringLayer(discRadius: Float) -> CIImage? {
@@ -307,7 +308,7 @@ final class LensEngine {
             guard var rings = ring.outputImage else { return nil }
 
             rings = rings.applyingGaussianBlur(sigma: 1.0).cropped(to: extent)
-            return scaled(rings, by: CGFloat(min(1.0, 1.45 * strength)),
+            return scaled(rings, by: CGFloat(min(1.0, 1.8 * strength)),
                           tint: (r: 1.0, g: 0.96, b: 0.88))
         }
 
@@ -371,8 +372,8 @@ final class LensEngine {
         let highlights = ramp(source, from: 0.62, to: 0.95)
         let bloom = CIFilter.bloom()
         bloom.inputImage = highlights.clampedToExtent()
-        bloom.intensity = Float(1.35 * strength)
-        bloom.radius = Float(dim * 0.02 * (0.5 + strength))
+        bloom.intensity = Float(1.9 * strength)
+        bloom.radius = Float(dim * 0.026 * (0.5 + strength))
         guard let halo = bloom.outputImage?.cropped(to: extent) else { return img }
 
         let weighted = customMask.map {
@@ -394,9 +395,9 @@ final class LensEngine {
                                           bands: [(factor: Double, weight: CIImage)]? = nil) -> CIImage {
         let strength = lens.chroma * k
         guard strength > 0.02 else { return img }
-        // Franges renforcées : 0.0035 était sous le seuil de visibilité
-        // sur un écran de téléphone.
-        let baseDelta = 0.010 * strength
+        // Franges renforcées : sous 0.010 le décalage restait sous le seuil
+        // de visibilité sur un écran de téléphone.
+        let baseDelta = 0.014 * strength
 
         /// Image dont les franges sont décalées d'un delta donné.
         func aberrated(delta: Double) -> CIImage? {
@@ -478,11 +479,12 @@ final class LensEngine {
         // Ici : copie légèrement assombrie mélangée par un masque radial
         // calé sur la demi-diagonale RÉELLE de l'image — rendu identique
         // à toutes les résolutions, et un simple souffle dans les angles
-        // (assombrissement max ~18 % au fin fond des coins).
+        // (assombrissement max ~14 % au fin fond des coins) : le
+        // vignettage signe les angles sans manger la lumière du cadre.
         let corner = hypot(extent.width, extent.height) / 2
-        let darkened = dimmed(img, to: 1 - 0.18 * CGFloat(strength))
+        let darkened = dimmed(img, to: 1 - 0.14 * CGFloat(strength))
         let mask = radialMask(extent: extent, center: center,
-                              inner: corner * 0.70, outer: corner * 1.02)
+                              inner: corner * 0.74, outer: corner * 1.02)
         let blend = CIFilter.blendWithMask()
         blend.inputImage = darkened
         blend.backgroundImage = img
