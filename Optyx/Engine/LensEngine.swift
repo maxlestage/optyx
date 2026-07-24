@@ -86,6 +86,15 @@ final class LensEngine {
     private func applyTone(_ img: CIImage, lens: LensProfile, k: Double) -> CIImage {
         var out = img
 
+        // Image PLUS CLAIRE : léger gain d'exposition global (+0,25 EV à
+        // pleine intensité). Le rendu vintage tirait l'ensemble vers le
+        // sombre (vignettage + voile + douceur) — les photos sortaient
+        // ternes et éteintes ; on repart d'une base lumineuse.
+        let exposure = CIFilter.exposureAdjust()
+        exposure.inputImage = out
+        exposure.ev = Float(0.25 * k)
+        out = exposure.outputImage ?? out
+
         // Lumière naturelle : le voile vintage reste une nuance, pas un
         // filtre gris — perte de contraste et noirs levés divisés par
         // deux ; l'exposition et les couleurs de la photo sont préservées,
@@ -235,9 +244,11 @@ final class LensEngine {
         // à rayon variable par pixel), alors qu'avec un masque déjà adouci le
         // fondu net → flou est visuellement identique — pour une fraction
         // du coût, sur tous les profils.
-        // Douceur renforcée : le fondu net → flou doit se voir, pas se
-        // deviner.
-        let sigma = dim * 0.016 * strength
+        // Douceur contenue : à 0.016, le flou transformait tout
+        // l'arrière-plan en bouillie grise sur les photos pleine
+        // résolution — plus aucun détail, image terne. Le fondu
+        // net → flou reste visible, mais l'image garde sa clarté.
+        let sigma = dim * 0.010 * strength
         let blurred = img.clampedToExtent()
             .applyingGaussianBlur(sigma: sigma)
             .cropped(to: extent)
@@ -457,28 +468,43 @@ final class LensEngine {
                                extent: CGRect, customMask: CIImage? = nil) -> CIImage {
         let strength = lens.vignette * k
         guard strength > 0.02 else { return img }
-        // Réglage adouci : l'ancien barème (intensité 1.1 × force, rayon
-        // 0.75) noircissait presque les coins sur les profils à fort
-        // vignettage (Noctilux, Dream Lens) et assombrissait toute la
-        // photo. Le rayon élargi repousse l'assombrissement vers les
-        // bords, l'intensité réduite le rend translucide — les écarts
-        // entre objectifs sont conservés.
-        let filter = CIFilter.vignetteEffect()
-        filter.inputImage = img
-        filter.center = center
-        // « Sortir le noir » : le vignettage n'est plus qu'un souffle dans
-        // les angles — l'exposition de la photo reste normale partout.
-        filter.radius = Float(dim * 0.96)
-        filter.intensity = Float(0.32 * strength)
-        filter.falloff = 0.3
-        guard let vignetted = filter.outputImage else { return img }
+        // Vignettage MAISON plutôt que CIVignetteEffect : le rayon de ce
+        // filtre est plafonné (~2000 px) — correct dans le viseur
+        // (900 px), il était silencieusement réduit sur les exports
+        // 3200 px et l'assombrissement avalait un tiers de l'image : le
+        // grand rond sombre des photos enregistrées, absent du viseur.
+        // Ici : copie légèrement assombrie mélangée par un masque radial
+        // calé sur la demi-diagonale RÉELLE de l'image — rendu identique
+        // à toutes les résolutions, et un simple souffle dans les angles
+        // (assombrissement max ~18 % au fin fond des coins).
+        let corner = hypot(extent.width, extent.height) / 2
+        let darkened = dimmed(img, to: 1 - 0.18 * CGFloat(strength))
+        let mask = radialMask(extent: extent, center: center,
+                              inner: corner * 0.70, outer: corner * 1.02)
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = darkened
+        blend.backgroundImage = img
+        blend.maskImage = mask
+        guard let vignetted = blend.outputImage else { return img }
 
         guard let customMask else { return vignetted }
-        let blend = CIFilter.blendWithMask()
-        blend.inputImage = vignetted.cropped(to: extent)
-        blend.backgroundImage = img
-        blend.maskImage = boosted(customMask, floor: 0.5)
-        return blend.outputImage ?? vignetted
+        let depthBlend = CIFilter.blendWithMask()
+        depthBlend.inputImage = vignetted.cropped(to: extent)
+        depthBlend.backgroundImage = img
+        depthBlend.maskImage = boosted(customMask, floor: 0.5)
+        return depthBlend.outputImage ?? vignetted
+    }
+
+    /// Copie assombrie : RVB multiplié par `factor`, alpha inchangé.
+    private func dimmed(_ img: CIImage, to factor: CGFloat) -> CIImage {
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = img
+        matrix.rVector = CIVector(x: factor, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: factor, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: factor, w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        matrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        return matrix.outputImage ?? img
     }
 
     /// Grain argentique en incrustation lumière douce.
