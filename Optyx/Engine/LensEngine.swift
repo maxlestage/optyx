@@ -48,7 +48,7 @@ final class LensEngine {
         // sujet — reste net (masque à 0 des deux côtés).
         let effectMask = depthMask.map { mask in
             maxed(mask, radialMask(extent: extent, center: center,
-                                   inner: dim * 0.22, outer: dim * 0.62))
+                                   inner: dim * 0.18, outer: dim * 0.55))
         }
         // Bandes de distance calculées UNE fois par trame et partagées :
         // chaque effet gradué qui recalculait les siennes produisait des
@@ -136,7 +136,7 @@ final class LensEngine {
         let filter = CIFilter.temperatureAndTint()
         filter.inputImage = img
         filter.neutral = CIVector(x: 6500, y: 0)
-        filter.targetNeutral = CIVector(x: 6500 + 1500 * lens.warmth * k, y: 2.5 * lens.warmth * k)
+        filter.targetNeutral = CIVector(x: 6500 + 2200 * lens.warmth * k, y: 3.5 * lens.warmth * k)
         return filter.outputImage ?? img
     }
 
@@ -156,12 +156,11 @@ final class LensEngine {
 
         /// Copie tourbillonnée pour une amplitude donnée (1 = nominale).
         func swirledLayer(amplitude: Double) -> CIImage? {
-            // 0.30 rad (~17°) : la rotation moyenne est géométriquement
-            // nulle au centre du cadre (sujet, horizon) — une amplitude
-            // timide rend le tourbillon invisible partout sauf dans les
-            // coins, que le vignettage recouvre. Le flou tangentiel accru
-            // fusionne les copies discrètes aux bords.
-            let maxAngle = 0.30 * strength * amplitude
+            // 0.38 rad (~22°) : la rotation moyenne est géométriquement
+            // nulle au centre du cadre (sujet, horizon) — les hautes
+            // lumières de l'arrière-plan doivent s'étirer en ARCS francs,
+            // la signature Helios se voit au premier regard.
+            let maxAngle = 0.38 * strength * amplitude
             // Échantillonnage adaptatif sur l'angle EFFECTIF — amplitude
             // des bandes de profondeur comprise (jusqu'à ×1.5) : à grand
             // angle, trop peu de copies se dissocient en répliques
@@ -173,7 +172,8 @@ final class LensEngine {
             case ..<0.12: count = 4
             case ..<0.20: count = 6
             case ..<0.30: count = 8
-            default: count = 12
+            case ..<0.42: count = 12
+            default: count = 16
             }
             let offsets = (0..<count).map { -1.0 + 2.0 * Double($0) / Double(count - 1) }
             let weight = CGFloat(1.0 / Double(count))
@@ -299,10 +299,12 @@ final class LensEngine {
         threshold.inputImage = gray
         // Seuil abaissé pour que les scènes d'intérieur (lampes, reflets)
         // fournissent encore des sources de bulles.
-        threshold.threshold = 0.55
+        threshold.threshold = 0.50
         guard let highlights = threshold.outputImage else { return img }
 
-        let baseRadius = Float(max(8, dim * 0.034))
+        // Grand diamètre : les anneaux doivent se voir comme sur un vrai
+        // Trioplan, pas se deviner.
+        let baseRadius = Float(max(10, dim * 0.045))
 
         /// Anneaux construits à partir des hautes lumières pour un diamètre donné.
         func ringLayer(discRadius: Float) -> CIImage? {
@@ -317,7 +319,7 @@ final class LensEngine {
             guard var rings = ring.outputImage else { return nil }
 
             rings = rings.applyingGaussianBlur(sigma: 1.0).cropped(to: extent)
-            return scaled(rings, by: CGFloat(min(1.0, 1.8 * strength)),
+            return scaled(rings, by: CGFloat(min(1.0, 2.2 * strength)),
                           tint: (r: 1.0, g: 0.96, b: 0.88))
         }
 
@@ -380,12 +382,16 @@ final class LensEngine {
         let source = customMask.map { multiplied(img, $0) } ?? img
         // Seuil abaissé : dans une pièce sombre, quasi aucun pixel ne
         // dépasse 0,62 — le halo n'existait que dans les scènes très
-        // lumineuses. À 0,50, une lampe ou une fenêtre suffisent.
-        let highlights = ramp(source, from: 0.50, to: 0.92)
+        // lumineuses. À 0,45, une lampe ou une fenêtre suffisent.
+        // Intensité et rayon généreux : le halo doit envelopper les
+        // lumières d'un voile VAPOREUX et LUMINEUX (Dream Lens,
+        // Noctilux), incrusté en écran par-dessus l'image intacte — il
+        // éclaircit, jamais ne grise.
+        let highlights = ramp(source, from: 0.45, to: 0.92)
         let bloom = CIFilter.bloom()
         bloom.inputImage = highlights.clampedToExtent()
-        bloom.intensity = Float(1.9 * strength)
-        bloom.radius = Float(dim * 0.026 * (0.5 + strength))
+        bloom.intensity = Float(2.5 * strength)
+        bloom.radius = Float(dim * 0.032 * (0.5 + strength))
         guard let halo = bloom.outputImage?.cropped(to: extent) else { return img }
 
         let weighted = customMask.map {

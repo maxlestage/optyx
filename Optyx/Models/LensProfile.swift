@@ -57,7 +57,7 @@ extension LensProfile {
             era: "1958 – années 1990",
             story: "Copie soviétique du Zeiss Biotar, produit à des millions d'exemplaires. Son bokeh tourbillonnant culte transforme les arrière-plans en spirale autour du sujet. Très abordable, c'est la porte d'entrée du monde vintage.",
             swirl: 1.00, bubble: 0.15, softness: 0.30, glow: 0.30, vignette: 0.45,
-            chroma: 0.35, warmth: 0.25, fade: 0.20, saturation: 0.97, grain: 0.20
+            chroma: 0.35, warmth: 0.25, fade: 0.20, saturation: 1.03, grain: 0.20
         ),
 
         LensProfile(
@@ -79,7 +79,7 @@ extension LensProfile {
             era: "1916 – 1970",
             story: "Un triplet optique tout simple dont l'aberration sphérique non corrigée produit le fameux bokeh « bulles de savon » : chaque point lumineux hors mise au point devient un anneau brillant.",
             swirl: 0.15, bubble: 1.00, softness: 0.30, glow: 0.40, vignette: 0.30,
-            chroma: 0.45, warmth: 0.20, fade: 0.20, saturation: 1.05, grain: 0.15
+            chroma: 0.45, warmth: 0.20, fade: 0.20, saturation: 1.08, grain: 0.15
         ),
 
         LensProfile(
@@ -101,7 +101,7 @@ extension LensProfile {
             era: "1976 – 2008",
             story: "Le roi de la nuit chez Leica. À f/1, l'image baigne dans un glow onirique, le vignettage est massif et la zone de netteté se réduit à un fil. Un rendu immédiatement reconnaissable.",
             swirl: 0.25, bubble: 0.10, softness: 0.45, glow: 0.95, vignette: 0.55,
-            chroma: 0.25, warmth: 0.10, fade: 0.15, saturation: 0.96, grain: 0.15
+            chroma: 0.25, warmth: 0.10, fade: 0.15, saturation: 0.98, grain: 0.15
         ),
 
         LensProfile(
@@ -112,7 +112,7 @@ extension LensProfile {
             era: "1961 – 1970",
             story: "Quasi mythique, très peu produit. À f/0.95, le monde devient un rêve : halos généreux, contraste évanescent, netteté fragile. C'est précisément ce voile onirique qui fait sa légende.",
             swirl: 0.30, bubble: 0.15, softness: 0.80, glow: 1.00, vignette: 0.50,
-            chroma: 0.50, warmth: 0.15, fade: 0.30, saturation: 0.93, grain: 0.20
+            chroma: 0.50, warmth: 0.15, fade: 0.25, saturation: 0.96, grain: 0.20
         ),
 
         LensProfile(
