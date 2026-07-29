@@ -8,13 +8,15 @@ ligne (faisable depuis un iPhone, Safari en « version ordinateur »).
 
 | Fichier | Rôle |
 |---|---|
-| `01-hero.png` … `06-profondeur.png` | 6 captures marketing 1320 × 2868 px (iPhone 6,9″) |
+| `01-hero.png` … `11-angenieux.png` | 11 captures marketing 1320 × 2868 px (iPhone 6,9″) — le héros, la profondeur, et chacun des 9 objectifs |
 | `fiche-app-store-fr.md` | Fiche française : nom, sous-titre, description, mots-clés… |
 | `fiche-app-store-en.md` | Localisation anglaise |
 | `generate.py` | Générateur des visuels (HTML → PNG via Chromium headless) |
 
-Ordre conseillé des captures dans la fiche : héros, Helios, Trioplan,
-Dream Lens, Takumar, Profondeur.
+App Store Connect accepte **10 captures maximum** ; il y en a 11.
+Ordre conseillé (en écartant par exemple le Biotar, doublon visuel de
+l'Helios) : héros, Helios, Trioplan, Dream Lens, Noctilux, Takumar,
+Summicron, Noct-Nikkor, Angénieux, Profondeur.
 
 ## Check-list de publication
 
