@@ -225,22 +225,29 @@ final class LensEngine {
             default: count = 16
             }
             let offsets = (0..<count).map { -1.0 + 2.0 * Double($0) / Double(count - 1) }
-            let weight = CGFloat(1.0 / Double(count))
+            // Moyenne COURANTE par interpolation (dissolve) et non par
+            // addition de copies à opacité réduite : la réduction d'alpha
+            // suivie d'une somme perd de la luminosité dans les tampons
+            // prémultipliés — la zone tourbillonnée sortait sombre, et
+            // d'autant plus que le nombre de copies était grand. Le grand
+            // rond sombre autour du sujet, c'était elle. L'interpolation
+            // garde l'alpha à 1 à chaque étape : moyenne exacte,
+            // luminosité intacte, quel que soit le nombre de copies.
             var accumulated: CIImage?
-            for offset in offsets {
+            for (index, offset) in offsets.enumerated() {
                 let angle = CGFloat(offset * maxAngle)
                 let transform = CGAffineTransform(translationX: center.x, y: center.y)
                     .rotated(by: angle)
                     .translatedBy(x: -center.x, y: -center.y)
                 let rotated = clamped.transformed(by: transform).cropped(to: extent)
-                let weighted = scaled(rotated, by: weight)
                 if let acc = accumulated {
-                    let add = CIFilter.additionCompositing()
-                    add.inputImage = weighted
-                    add.backgroundImage = acc
-                    accumulated = add.outputImage
+                    let mix = CIFilter.dissolveTransition()
+                    mix.inputImage = acc
+                    mix.targetImage = rotated
+                    mix.time = Float(1.0 / Double(index + 1))
+                    accumulated = mix.outputImage ?? acc
                 } else {
-                    accumulated = weighted
+                    accumulated = rotated
                 }
             }
             guard let swirled = accumulated else { return nil }
