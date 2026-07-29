@@ -93,14 +93,19 @@ final class LensEngine {
     private func applyTone(_ img: CIImage, lens: LensProfile, k: Double) -> CIImage {
         var out = img
 
-        // Image PLUS CLAIRE : gain d'exposition global (+0,4 EV à pleine
-        // intensité). Le rendu vintage tirait l'ensemble vers le sombre
-        // (vignettage + voile + douceur) — les photos sortaient ternes et
-        // éteintes ; on repart d'une base lumineuse.
-        let exposure = CIFilter.exposureAdjust()
-        exposure.inputImage = out
-        exposure.ev = Float(0.40 * k)
-        out = exposure.outputImage ?? out
+        // Image PLUS CLAIRE : gain d'exposition qui COMPENSE ce que le
+        // profil mange en lumière (voile + vignettage + douceur), jusqu'à
+        // +0,4 EV à pleine intensité. Proportionnel au caractère du
+        // profil : le profil Neutre (tout à zéro) reste rigoureusement
+        // identique à ce que voit le capteur — c'est sa promesse — et les
+        // profils discrets (Summicron) ne sont pas surexposés.
+        let dimming = min(1.0, lens.fade + lens.vignette + lens.softness)
+        if dimming > 0.01 {
+            let exposure = CIFilter.exposureAdjust()
+            exposure.inputImage = out
+            exposure.ev = Float(0.40 * dimming * k)
+            out = exposure.outputImage ?? out
+        }
 
         // Lumière naturelle : le voile vintage reste une nuance, pas un
         // filtre gris — perte de contraste et noirs levés réduits au
@@ -391,7 +396,10 @@ final class LensEngine {
         let bloom = CIFilter.bloom()
         bloom.inputImage = highlights.clampedToExtent()
         bloom.intensity = Float(2.5 * strength)
-        bloom.radius = Float(dim * 0.032 * (0.5 + strength))
+        // Rayon plafonné à 100 : au-delà, CIBloom sort de sa plage
+        // documentée — sur un export 3200 px le rayon calculé la
+        // dépassait, halo incohérent entre viseur et photo enregistrée.
+        bloom.radius = Float(min(100, dim * 0.032 * (0.5 + strength)))
         guard let halo = bloom.outputImage?.cropped(to: extent) else { return img }
 
         let weighted = customMask.map {
