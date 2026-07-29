@@ -199,7 +199,12 @@ final class LensEngine {
                             customMask: CIImage? = nil,
                             bands: [(factor: Double, weight: CIImage)]? = nil) -> CIImage {
         let strength = lens.swirl * k
-        guard strength > 0.02 else { return img }
+        // Sous 15 %, l'angle est si petit que la moyenne de 2 copies fait
+        // une DOUBLE EXPOSITION (contours dédoublés sur les membres, les
+        // montants) au lieu d'un flou tangentiel : l'effet nuit plus
+        // qu'il n'apporte, autant ne rien faire (Takumar, Noct-Nikkor,
+        // Angénieux — leur signature est ailleurs).
+        guard strength > 0.15 else { return img }
 
         let clamped = img.clampedToExtent()
 
@@ -357,7 +362,26 @@ final class LensEngine {
         // Seuil abaissé pour que les scènes d'intérieur (lampes, reflets)
         // fournissent encore des sources de bulles.
         threshold.threshold = 0.50
-        guard let highlights = threshold.outputImage else { return img }
+        guard let thresholded = threshold.outputImage else { return img }
+
+        // Ne garder que les hautes lumières PONCTUELLES. Le seuil brut
+        // retient aussi les grandes plages claires (ciel, écran, chemise
+        // blanche) — la morphologie en extrayait alors le CONTOUR : gros
+        // liseré lumineux autour de ces surfaces au lieu de bulles.
+        // Une ouverture (érosion puis dilatation) efface les points mais
+        // conserve les grandes plages ; leur soustraction du masque
+        // initial isole les points seuls.
+        let openRadius = Float(max(4, dim * 0.014))
+        let erode = CIFilter.morphologyMinimum()
+        erode.inputImage = thresholded.clampedToExtent()
+        erode.radius = openRadius
+        let reDilate = CIFilter.morphologyMaximum()
+        reDilate.inputImage = erode.outputImage
+        // Légèrement plus large que l'érosion : couvre entièrement le
+        // bord des grandes plages, sinon un filet d'un pixel y survit.
+        reDilate.radius = openRadius * 1.2
+        guard let broad = reDilate.outputImage?.cropped(to: extent) else { return img }
+        let highlights = multiplied(thresholded, inverted(broad)).cropped(to: extent)
 
         // Grand diamètre : les anneaux doivent se voir comme sur un vrai
         // Trioplan, pas se deviner.
