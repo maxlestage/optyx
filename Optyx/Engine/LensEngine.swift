@@ -213,8 +213,11 @@ final class LensEngine {
             // 0.38 rad (~22°) : la rotation moyenne est géométriquement
             // nulle au centre du cadre (sujet, horizon) — les hautes
             // lumières de l'arrière-plan doivent s'étirer en ARCS francs,
-            // la signature Helios se voit au premier regard.
-            let maxAngle = 0.38 * strength * amplitude
+            // la signature Helios se voit au premier regard. L'amplitude
+            // des bandes lointaines est bornée : à ×1,5 l'angle total
+            // dépassait 60° et aucun nombre raisonnable de copies ne
+            // fusionne plus.
+            let maxAngle = 0.38 * strength * min(amplitude, 1.2)
             // Échantillonnage adaptatif sur l'angle EFFECTIF — amplitude
             // des bandes de profondeur comprise (jusqu'à ×1.5) : à grand
             // angle, trop peu de copies se dissocient en répliques
@@ -256,9 +259,14 @@ final class LensEngine {
                 }
             }
             guard let swirled = accumulated else { return nil }
-            // Le flou tangentiel croît avec l'amplitude pour souder les
-            // copies discrètes des grandes rotations.
-            let sigma = (1.2 + 3.4 * strength) * (0.4 + 0.7 * amplitude)
+            // Flou tangentiel avec PLANCHER calé sur l'écart réel entre
+            // copies (arc parcouru / nombre de copies, au rayon des
+            // bords) : quel que soit l'angle, les répliques discrètes
+            // fusionnent en arc continu — fini les ondulations
+            // concentriques sur les textures (sable, murs) et les
+            // contours dédoublés aux amplitudes moyennes.
+            let gapBlur = Double(dim) * maxAngle / Double(count) * 0.35
+            let sigma = max((1.2 + 3.4 * strength) * (0.4 + 0.7 * amplitude), gapBlur)
             return swirled.clampedToExtent()
                 .applyingGaussianBlur(sigma: sigma)
                 .cropped(to: extent)
@@ -466,14 +474,15 @@ final class LensEngine {
         // halo collé à la silhouette ; le halo du fond est pondéré par le
         // masque.
         let source = customMask.map { multiplied(img, $0) } ?? img
-        // Seuil abaissé : dans une pièce sombre, quasi aucun pixel ne
-        // dépasse 0,62 — le halo n'existait que dans les scènes très
-        // lumineuses. À 0,45, une lampe ou une fenêtre suffisent.
+        // Seuil à 0,55 : assez bas pour qu'une lampe ou une fenêtre
+        // suffisent dans une pièce sombre, assez haut pour qu'un ciel ou
+        // un sable de plage entiers ne « bloomen » pas — à 0,45, les
+        // scènes de jour se noyaient sous un voile blanc.
         // Intensité et rayon généreux : le halo doit envelopper les
         // lumières d'un voile VAPOREUX et LUMINEUX (Dream Lens,
         // Noctilux), incrusté en écran par-dessus l'image intacte — il
         // éclaircit, jamais ne grise.
-        let highlights = ramp(source, from: 0.45, to: 0.92)
+        let highlights = ramp(source, from: 0.55, to: 0.92)
         let bloom = CIFilter.bloom()
         bloom.inputImage = highlights.clampedToExtent()
         bloom.intensity = Float(2.5 * strength)
