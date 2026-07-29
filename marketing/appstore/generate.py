@@ -116,7 +116,7 @@ body {
 }
 """
 
-def phone(scene_html, chips, ui=True, top="Profondeur"):
+def phone(scene_html, chips, ui=True, top="Profondeur", video=False):
     c = ""
     for name, focal, on in chips:
         c += f'<div class="chip{" on" if on else ""}"><div class="n">{name}</div><div class="f">{focal}</div></div>'
@@ -126,17 +126,19 @@ def phone(scene_html, chips, ui=True, top="Profondeur"):
         <div class="topchips"><div class="tchip">AE/AF</div><div class="tchip on">&#9679;&nbsp;{top}</div><div class="tchip">RAW</div></div>
         <div class="chipbar">{c}</div>
         <div class="slider"></div><div class="pct">100&nbsp;%</div>
-        <div class="modes"><span class="accent">Photo</span><span class="off">Vidéo</span></div>
+        <div class="modes">{'<span class="off">Photo</span><span class="accent" style="margin-left:40px">Vidéo</span>' if video else '<span class="accent">Photo</span><span class="off">Vidéo</span>'}</div>
         <div class="shutter"></div>"""
     return f"""<div class="phone"><div class="island"></div>
       <div class="scene">{scene_html}<div class="vig"></div></div>{ui_html}</div>"""
 
-def dots(seed_pts, palette, blur=22, z=1):
+def dots(seed_pts, palette, blur=22, z=1, hard=False):
     html = ""
+    stop = "62%" if hard else "72%"
+    inner = "58%" if hard else "0%"
     for i, (x, y, s, ci, o) in enumerate(seed_pts):
         ccol = palette[ci % len(palette)]
         html += (f'<div class="dot" style="left:{x}px;top:{y}px;width:{s}px;height:{s}px;'
-                 f'background:radial-gradient(circle at 38% 35%, {ccol} 0%, transparent 72%);'
+                 f'background:radial-gradient(circle at 38% 35%, {ccol} {inner}, {ccol} {inner}, transparent {stop});'
                  f'opacity:{o};filter:blur({blur}px);z-index:{z};"></div>')
     return html
 
@@ -277,3 +279,91 @@ page("06-profondeur.html",
      body, sub_top=330)
 
 print("6 pages générées dans", OUT)
+
+
+# ---------------------------------------------------------------- écran 7 : Biotar
+PAL_BIOTAR = ["rgba(200,225,190,.85)", "rgba(235,235,220,.85)", "rgba(170,200,230,.7)",
+              "rgba(230,210,170,.8)"]
+cx, cy = 500, 880
+arcs = []
+for i in range(30):
+    r = 300 + (i * 51) % 560
+    a0 = (i * 61.7) % 360
+    span = 12 + (i * 5) % 18
+    arcs.append((r, a0, span, i, .26 + (i % 4) * .10))
+scene = ('<div style="position:absolute;inset:0;background:radial-gradient(80% 65% at 50% 42%, #1a2018 0%, #0e120d 55%, #050604 100%);"></div>'
+         + dots([(cx-120,cy-170,260,1,.9),(cx-10,cy-40,170,0,.9)], PAL_BIOTAR, blur=16)
+         + swirl_arcs(cx, cy, arcs, PAL_BIOTAR, thick=22, blur=16))
+body = phone(scene, [("Helios 44-2","58 mm f/2",False),("Zeiss Biotar","58 mm f/2",True),("Trioplan","100 mm f/2.8",False)])
+page("07-biotar.html",
+     'Le tourbillon <span class="accent">originel.</span>',
+     "Zeiss Biotar, 1936 : la spirale dont l\'Helios est la copie — plus douce, plus raffinée, plus rare.",
+     body, sub_top=330)
+
+# ---------------------------------------------------------------- écran 8 : Summicron
+PAL_LEICA = ["rgba(240,238,232,.95)", "rgba(255,225,170,.9)", "rgba(190,215,240,.85)",
+             "rgba(255,180,120,.85)"]
+pts = [(150,260,90,0,.9),(420,180,70,1,.85),(680,320,110,2,.8),(260,560,60,3,.9),
+       (560,620,95,0,.85),(120,860,80,1,.8),(720,880,70,2,.85),(380,1050,100,0,.9),
+       (200,1300,75,3,.8),(620,1260,85,1,.85),(460,1520,65,0,.9),(770,1520,90,2,.7),
+       (90,1650,70,1,.8),(330,1760,80,0,.85)]
+scene = ('<div style="position:absolute;inset:0;background:linear-gradient(170deg,#23211e 0%, #131210 55%, #070706 100%);"></div>'
+         + dots(pts, PAL_LEICA, blur=2, hard=True))
+body = phone(scene, [("Trioplan","100 mm f/2.8",False),("Summicron","50 mm f/2",True),("Noctilux","50 mm f/1",False)])
+page("08-summicron.html",
+     'La précision <span class="accent">Leica.</span>',
+     "Summicron 50 mm : micro-contraste superbe, rendu précis, jamais clinique. Le classique du reportage.",
+     body, sub_top=330)
+
+# ---------------------------------------------------------------- écran 9 : Noctilux
+PAL_NOCT = ["rgba(255,220,150,1)", "rgba(255,190,110,.95)", "rgba(180,200,255,.8)",
+            "rgba(255,240,200,1)"]
+pts = [(180,300,180,0,.95),(600,220,240,3,.9),(320,620,150,1,.9),(700,700,190,0,.85),
+       (110,950,220,3,.8),(500,1100,170,1,.9),(260,1420,200,0,.8),(660,1400,150,2,.7),
+       (420,1700,180,3,.8),(90,1650,140,2,.6)]
+halos = ""
+for x, y, s, ci, o in pts:
+    halos += (f'<div class="dot" style="left:{x-s}px;top:{y-s}px;width:{s*3}px;height:{s*3}px;'
+              f'background:radial-gradient(circle, rgba(255,230,180,{o*0.35:.2f}) 0%, transparent 65%);'
+              f'filter:blur(30px);"></div>')
+scene = ('<div style="position:absolute;inset:0;background:radial-gradient(85% 70% at 50% 40%, #10131f 0%, #090a12 55%, #030304 100%);"></div>'
+         + halos + dots(pts, PAL_NOCT, blur=18))
+body = phone(scene, [("Summicron","50 mm f/2",False),("Noctilux","50 mm f/1",True),("Dream Lens","50 mm f/0.95",False)])
+page("09-noctilux.html",
+     'Le roi de la <span class="accent">nuit.</span>',
+     "Leica Noctilux à f/1 : chaque lumière baigne dans un glow onirique, la netteté se réduit à un fil.",
+     body, sub_top=330)
+
+# ---------------------------------------------------------------- écran 10 : Noct-Nikkor
+PAL_NIKKOR = ["rgba(245,245,250,.95)", "rgba(255,230,170,.9)", "rgba(170,200,255,.85)"]
+pts = [(140,240,50,0,.95),(430,170,40,1,.9),(690,300,55,2,.85),(250,540,35,0,.95),
+       (570,600,45,1,.9),(120,840,40,2,.85),(730,860,38,0,.9),(390,1020,50,1,.95),
+       (210,1280,36,0,.85),(630,1240,42,2,.9),(470,1500,38,1,.9),(780,1490,45,0,.8),
+       (100,1620,40,1,.85),(340,1740,44,0,.9),(660,1680,36,2,.8)]
+glow_layer = '<div style="position:absolute;inset:0;background:radial-gradient(70% 55% at 50% 35%, rgba(120,150,220,.10) 0%, transparent 70%);"></div>'
+scene = ('<div style="position:absolute;inset:0;background:radial-gradient(90% 70% at 50% 38%, #0d1018 0%, #07080d 55%, #020203 100%);"></div>'
+         + glow_layer + dots(pts, PAL_NIKKOR, blur=1, hard=True))
+body = phone(scene, [("Super Takumar","50 mm f/1.4",False),("Noct-Nikkor","58 mm f/1.2",True),("Angénieux","25–250 mm",False)])
+page("10-noctnikkor.html",
+     'La nuit, <span class="accent">maîtrisée.</span>',
+     "Noct-Nikkor 58 mm : sa lentille asphérique polie à la main dompte le coma — des points nets, un contraste franc.",
+     body, sub_top=330)
+
+# ---------------------------------------------------------------- écran 11 : Angénieux
+PAL_CINE = ["rgba(255,190,120,.9)", "rgba(120,190,190,.7)", "rgba(255,225,180,.9)",
+            "rgba(200,150,110,.8)"]
+pts = [(150,700,260,0,.75),(600,620,300,1,.6),(360,900,200,2,.8),(720,1000,240,0,.65),
+       (90,1100,280,3,.6),(480,1250,220,1,.65),(260,1450,240,0,.7)]
+grain = ("""<svg style="position:absolute;inset:0;width:100%;height:100%;z-index:18;opacity:.32;mix-blend-mode:overlay;">
+  <filter id="g"><feTurbulence type="fractalNoise" baseFrequency="0.75" numOctaves="2" stitchTiles="stitch"/>
+  <feColorMatrix type="saturate" values="0"/></filter>
+  <rect width="100%" height="100%" filter="url(#g)"/></svg>""")
+bars = ('<div style="position:absolute;left:0;right:0;top:0;height:560px;background:#000;z-index:16;"></div>'
+        '<div style="position:absolute;left:0;right:0;bottom:0;height:560px;background:#000;z-index:16;"></div>')
+scene = ('<div style="position:absolute;inset:0;background:linear-gradient(165deg,#2a2018 0%, #1a1a16 45%, #0d1210 100%);"></div>'
+         + dots(pts, PAL_CINE, blur=26) + grain + bars)
+body = phone(scene, [("Noct-Nikkor","58 mm f/1.2",False),("Angénieux","zoom 25–250 mm",True),("Neutre","—",False)], video=True)
+page("11-angenieux.html",
+     'Le rendu <span class="accent">cinéma.</span>',
+     "Les zooms légendaires d\'Hollywood à la Nouvelle Vague : contraste doux, couleurs chaudes, grain présent — et letterbox CinemaScope.",
+     body, sub_top=330)

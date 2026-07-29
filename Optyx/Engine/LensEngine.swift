@@ -58,7 +58,9 @@ final class LensEngine {
         var img = input
 
         img = applyTone(img, lens: lens, k: k)
+        img = applyPunch(img, lens: lens, k: k)
         img = applyWarmth(img, lens: lens, k: k)
+        img = applyCineTone(img, lens: lens, k: k)
         img = applySwirl(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
                          customMask: effectMask, bands: bands)
         img = applyEdgeSoftness(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
@@ -130,6 +132,48 @@ final class LensEngine {
             out = poly.outputImage ?? out
         }
         return out
+    }
+
+    /// Micro-contraste des verres précis (Summicron, Noct-Nikkor) :
+    /// netteté de luminance et punch — l'opposé des rêveurs. C'est ce qui
+    /// rend ces profils immédiatement reconnaissables face au flux brut.
+    private func applyPunch(_ img: CIImage, lens: LensProfile, k: Double) -> CIImage {
+        let strength = lens.punch * k
+        guard strength > 0.02 else { return img }
+        let sharpen = CIFilter.sharpenLuminance()
+        sharpen.inputImage = img
+        sharpen.sharpness = Float(0.5 * strength)
+        var out = sharpen.outputImage ?? img
+        let controls = CIFilter.colorControls()
+        controls.inputImage = out
+        controls.contrast = Float(1.0 + 0.07 * strength)
+        controls.saturation = 1
+        controls.brightness = 0
+        out = controls.outputImage ?? out
+        return out
+    }
+
+    /// Virage bicolore cinéma (Angénieux) : les ombres glissent vers le
+    /// bleu-vert pendant que la dérive chaude réchauffe les tons clairs —
+    /// le contraste orange/teal des pellicules étalonnées en laboratoire.
+    private func applyCineTone(_ img: CIImage, lens: LensProfile, k: Double) -> CIImage {
+        let strength = lens.cine * k
+        guard strength > 0.02 else { return img }
+        let mono = CIFilter.colorControls()
+        mono.inputImage = img
+        mono.saturation = 0
+        mono.contrast = 1
+        guard let gray = mono.outputImage else { return img }
+        // Masque d'ombres : plein dans les noirs, nul dès les tons moyens.
+        let shadows = inverted(ramp(gray, from: 0.15, to: 0.55))
+        let teal = CIImage(color: CIColor(red: 0, green: 0.35, blue: 0.38, alpha: 1))
+            .cropped(to: img.extent)
+        let weighted = multiplied(scaled(teal, by: CGFloat(0.35 * strength)), shadows)
+            .cropped(to: img.extent)
+        let screen = CIFilter.screenBlendMode()
+        screen.inputImage = weighted
+        screen.backgroundImage = img
+        return screen.outputImage ?? img
     }
 
     /// Dérive chaude (verre au thorium, traitements anciens).

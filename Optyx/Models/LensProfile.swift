@@ -31,6 +31,12 @@ struct LensProfile: Identifiable, Hashable {
     var saturation: Double
     /// Grain argentique.
     var grain: Double
+    /// Micro-contraste : netteté de luminance et punch (verres précis
+    /// type Summicron, Noct-Nikkor) — l'opposé des rêveurs.
+    var punch: Double = 0
+    /// Virage bicolore cinéma : ombres bleu-vert, tons clairs chauds
+    /// (pellicule de laboratoire, Angénieux).
+    var cine: Double = 0
 }
 
 extension LensProfile {
@@ -90,7 +96,8 @@ extension LensProfile {
             era: "1953 – aujourd'hui",
             story: "Le classique du reportage : micro-contraste superbe, rendu précis mais jamais clinique. Un « défaut » discret : un léger vignettage et une signature douce à pleine ouverture.",
             swirl: 0.00, bubble: 0.00, softness: 0.10, glow: 0.15, vignette: 0.20,
-            chroma: 0.05, warmth: 0.05, fade: 0.08, saturation: 1.06, grain: 0.10
+            chroma: 0.05, warmth: 0.05, fade: 0.08, saturation: 1.06, grain: 0.10,
+            punch: 0.70
         ),
 
         LensProfile(
@@ -134,7 +141,8 @@ extension LensProfile {
             era: "1977 – 1997",
             story: "Conçu pour photographier la nuit : sa lentille asphérique polie à la main dompte le coma des points lumineux. Contraste élevé pour son époque, léger halo à pleine ouverture.",
             swirl: 0.10, bubble: 0.05, softness: 0.15, glow: 0.55, vignette: 0.40,
-            chroma: 0.10, warmth: 0.00, fade: 0.08, saturation: 1.08, grain: 0.30
+            chroma: 0.10, warmth: 0.00, fade: 0.08, saturation: 1.08, grain: 0.30,
+            punch: 0.85
         ),
 
         LensProfile(
@@ -145,7 +153,8 @@ extension LensProfile {
             era: "1956 – aujourd'hui",
             story: "Les zooms de cinéma légendaires de Pierre Angénieux, utilisés d'Hollywood à la Nouvelle Vague. Rendu ciné par excellence : contraste doux, couleurs chaudes, grain présent.",
             swirl: 0.05, bubble: 0.10, softness: 0.25, glow: 0.45, vignette: 0.35,
-            chroma: 0.20, warmth: 0.40, fade: 0.30, saturation: 0.93, grain: 0.60
+            chroma: 0.20, warmth: 0.40, fade: 0.30, saturation: 0.93, grain: 0.60,
+            cine: 0.85
         ),
     ]
 
@@ -161,6 +170,8 @@ extension LensProfile {
             ("Dérive chaude", warmth),
             ("Voile / contraste bas", fade),
             ("Grain", grain),
+            ("Micro-contraste", punch),
+            ("Virage ciné", cine),
         ]
     }
 }
