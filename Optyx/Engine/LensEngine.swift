@@ -153,23 +153,6 @@ final class LensEngine {
         guard strength > 0.02 else { return img }
 
         let clamped = img.clampedToExtent()
-        // Échantillonnage adaptatif : un tourbillon discret est visuellement
-        // identique avec 2 rotations qu'avec 6 — inutile de payer le coût
-        // plein pour un effet à peine perceptible (profils « ciné »).
-        let offsets: [Double]
-        if strength < 0.15 {
-            offsets = [-1.0, 1.0]
-        } else if strength < 0.4 {
-            offsets = [-1.0, -0.33, 0.33, 1.0]
-        } else if strength < 0.6 {
-            offsets = [-1.0, -0.6, -0.2, 0.2, 0.6, 1.0]
-        } else {
-            // Grande amplitude : 8 copies pour que les répliques discrètes
-            // fusionnent en arc continu au lieu de dédoubler les hautes
-            // lumières.
-            offsets = [-1.0, -0.71, -0.43, -0.14, 0.14, 0.43, 0.71, 1.0]
-        }
-        let weight = CGFloat(1.0 / Double(offsets.count))
 
         /// Copie tourbillonnée pour une amplitude donnée (1 = nominale).
         func swirledLayer(amplitude: Double) -> CIImage? {
@@ -179,6 +162,21 @@ final class LensEngine {
             // coins, que le vignettage recouvre. Le flou tangentiel accru
             // fusionne les copies discrètes aux bords.
             let maxAngle = 0.30 * strength * amplitude
+            // Échantillonnage adaptatif sur l'angle EFFECTIF — amplitude
+            // des bandes de profondeur comprise (jusqu'à ×1.5) : à grand
+            // angle, trop peu de copies se dissocient en répliques
+            // fantômes au lieu de fusionner en arc continu ; à angle
+            // discret, 2 copies suffisent (profils « ciné »).
+            let count: Int
+            switch maxAngle {
+            case ..<0.05: count = 2
+            case ..<0.12: count = 4
+            case ..<0.20: count = 6
+            case ..<0.30: count = 8
+            default: count = 12
+            }
+            let offsets = (0..<count).map { -1.0 + 2.0 * Double($0) / Double(count - 1) }
+            let weight = CGFloat(1.0 / Double(count))
             var accumulated: CIImage?
             for offset in offsets {
                 let angle = CGFloat(offset * maxAngle)
@@ -197,7 +195,9 @@ final class LensEngine {
                 }
             }
             guard let swirled = accumulated else { return nil }
-            let sigma = (1.2 + 3.2 * strength) * (0.4 + 0.6 * amplitude)
+            // Le flou tangentiel croît avec l'amplitude pour souder les
+            // copies discrètes des grandes rotations.
+            let sigma = (1.2 + 3.4 * strength) * (0.4 + 0.7 * amplitude)
             return swirled.clampedToExtent()
                 .applyingGaussianBlur(sigma: sigma)
                 .cropped(to: extent)
