@@ -327,10 +327,11 @@ final class LensEngine {
                                   customMask: CIImage? = nil,
                                   bands: [(factor: Double, weight: CIImage)]? = nil) -> CIImage {
         let strength = lens.bubble * k
-        // Sous 10 %, les anneaux (incrustés à 0,75 × strength) sont
-        // invisibles à l'écran alors que la morphologie coûte cher :
-        // autant ne rien faire.
-        guard strength > 0.1 else { return img }
+        // Les bulles sont la signature du SEUL Trioplan (1.0) : sur les
+        // autres profils (0.05–0.20), les anneaux — devenus grands et
+        // brillants — apparaissaient en fantômes octogonaux collés aux
+        // reflets du sujet, un artefact plutôt qu'un caractère.
+        guard strength > 0.3 else { return img }
 
         let mono = CIFilter.colorControls()
         // Avec un masque de profondeur, seules les hautes lumières de
@@ -360,14 +361,19 @@ final class LensEngine {
             let dilate = CIFilter.morphologyMaximum()
             dilate.inputImage = highlights.clampedToExtent()
             dilate.radius = discRadius
-            guard let discs = dilate.outputImage else { return nil }
+            guard let dilated = dilate.outputImage else { return nil }
+            // La morphologie de Core Image travaille sur un octogone :
+            // sans adoucissement, les « bulles » sortent à facettes. Un
+            // flou proportionnel au rayon arrondit les disques avant d'en
+            // extraire le contour.
+            let discs = dilated.applyingGaussianBlur(sigma: Double(discRadius) * 0.12)
 
             let ring = CIFilter.morphologyGradient()
             ring.inputImage = discs
             ring.radius = max(1.5, discRadius * 0.18)
             guard var rings = ring.outputImage else { return nil }
 
-            rings = rings.applyingGaussianBlur(sigma: 1.0).cropped(to: extent)
+            rings = rings.applyingGaussianBlur(sigma: 1.5).cropped(to: extent)
             return scaled(rings, by: CGFloat(min(1.0, 2.2 * strength)),
                           tint: (r: 1.0, g: 0.96, b: 0.88))
         }
@@ -476,7 +482,6 @@ final class LensEngine {
             // de Core Image sont prémultipliés (RVB ≤ alpha) — un canal à
             // alpha 0 verrait ses couleurs écrasées à zéro sur l'appareil,
             // et seul le vert survivrait (image entièrement verte).
-            // L'alpha sommé (3) est ramené à 1 par le colorClamp final.
             let red = channel(clamped, r: 1, g: 0, b: 0, keepAlpha: true)
                 .transformed(by: scaleAround(center, factor: 1 + delta))
                 .cropped(to: extent)
@@ -486,21 +491,23 @@ final class LensEngine {
                 .transformed(by: scaleAround(center, factor: 1 - delta))
                 .cropped(to: extent)
 
-            let addRG = CIFilter.additionCompositing()
-            addRG.inputImage = red
-            addRG.backgroundImage = green
-            guard let rg = addRG.outputImage else { return nil }
+            // Assemblage par MAXIMUM et non par addition : les canaux sont
+            // disjoints (max = somme composante par composante) mais
+            // l'alpha reste à 1. L'addition portait l'alpha à 3, et le
+            // rendu prémultiplié compensait en divisant les couleurs par
+            // trois — TOUTE la zone couverte par la couche d'aberration
+            // sortait trois fois trop sombre : image terne sans
+            // profondeur, et grand rond sombre au-delà du rayon où le
+            // masque profondeur ∪ champ atteint 100 %.
+            let maxRG = CIFilter.maximumCompositing()
+            maxRG.inputImage = red
+            maxRG.backgroundImage = green
+            guard let rg = maxRG.outputImage else { return nil }
 
-            let addRGB = CIFilter.additionCompositing()
-            addRGB.inputImage = blue
-            addRGB.backgroundImage = rg
-            guard let rgb = addRGB.outputImage else { return nil }
-
-            let clamp = CIFilter.colorClamp()
-            clamp.inputImage = rgb
-            clamp.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
-            clamp.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
-            return clamp.outputImage
+            let maxRGB = CIFilter.maximumCompositing()
+            maxRGB.inputImage = blue
+            maxRGB.backgroundImage = rg
+            return maxRGB.outputImage
         }
 
         if let customMask {
