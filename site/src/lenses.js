@@ -1,5 +1,7 @@
 // Catalogue des 9 objectifs — miroir de Optyx/Models/LensProfile.swift.
-// `scene` pilote le visuel CSS de la carte ; `accent` teinte la carte.
+// `scene` pilote le visuel CSS des cartes, `three` la scène React Three
+// Fiber du héros, `accent` teinte la carte, `signature` est la phrase
+// d'accroche, `traits` liste les caractéristiques (valeurs de l'app).
 
 export const lenses = [
   {
@@ -10,12 +12,25 @@ export const lenses = [
     era: '1958 – années 1990',
     story:
       "Copie soviétique du Zeiss Biotar, produit à des millions d'exemplaires. Son bokeh tourbillonnant culte transforme les arrière-plans en spirale autour du sujet. Très abordable, c'est la porte d'entrée du monde vintage.",
+    signature: "« L'arrière-plan tournoie. Littéralement. »",
     scene: 'swirl',
     accent: '#b8d977',
+    three: {
+      palette: ['#d7f0a4', '#f0e0a0', '#a8c877'],
+      swirl: 1.0,
+      size: 0.5,
+      ring: false,
+      glow: 0.3,
+      haze: 0.05,
+    },
     traits: [
       ['Tourbillon', 1.0],
       ['Vignettage', 0.45],
       ['Aberration chromatique', 0.35],
+      ['Douceur des bords', 0.3],
+      ['Halo / glow', 0.3],
+      ['Dérive chaude', 0.25],
+      ['Grain', 0.2],
     ],
   },
   {
@@ -26,12 +41,24 @@ export const lenses = [
     era: '1936 – 1960',
     story:
       "L'original allemand dont l'Helios est la copie. Même tourbillon, mais avec un rendu un peu plus doux et raffiné. Plus rare et nettement plus cher que son clone soviétique.",
+    signature: '« Le même vertige, en gants de velours. »',
     scene: 'swirl-soft',
     accent: '#a8c4b8',
+    three: {
+      palette: ['#d4e8d8', '#e8e4cc', '#b8ccc0'],
+      swirl: 0.7,
+      size: 0.55,
+      ring: false,
+      glow: 0.35,
+      haze: 0.1,
+    },
     traits: [
       ['Tourbillon', 0.85],
+      ['Vignettage', 0.38],
       ['Halo / glow', 0.35],
+      ['Aberration chromatique', 0.3],
       ['Douceur des bords', 0.25],
+      ['Grain', 0.15],
     ],
   },
   {
@@ -42,12 +69,24 @@ export const lenses = [
     era: '1916 – 1970',
     story:
       "Un triplet optique tout simple dont l'aberration sphérique non corrigée produit le fameux bokeh « bulles de savon » : chaque point lumineux hors mise au point devient un anneau brillant.",
+    signature: '« Chaque lumière devient une bulle de savon. »',
     scene: 'bubbles',
     accent: '#e8c98a',
+    three: {
+      palette: ['#f4e2b8', '#f0c070', '#ffe8c8'],
+      swirl: 0.1,
+      size: 0.9,
+      ring: true,
+      glow: 0.45,
+      haze: 0.05,
+    },
     traits: [
       ['Bulles de savon', 1.0],
       ['Aberration chromatique', 0.45],
       ['Halo / glow', 0.45],
+      ['Douceur des bords', 0.3],
+      ['Vignettage', 0.3],
+      ['Dérive chaude', 0.2],
     ],
   },
   {
@@ -58,12 +97,23 @@ export const lenses = [
     era: '1953 – aujourd’hui',
     story:
       "Le classique du reportage : micro-contraste superbe, rendu précis mais jamais clinique. Un « défaut » discret : un léger vignettage et une signature douce à pleine ouverture.",
+    signature: "« Le piqué qui a écrit l'histoire du reportage. »",
     scene: 'crisp',
     accent: '#e8e4dc',
+    three: {
+      palette: ['#f0ede4', '#ffe0aa', '#c2d4ec'],
+      swirl: 0.0,
+      size: 0.22,
+      ring: false,
+      glow: 0.1,
+      haze: 0,
+    },
     traits: [
       ['Micro-contraste', 0.7],
-      ['Saturation', 0.6],
       ['Vignettage', 0.2],
+      ['Halo / glow', 0.15],
+      ['Douceur des bords', 0.1],
+      ['Grain', 0.1],
     ],
   },
   {
@@ -74,12 +124,24 @@ export const lenses = [
     era: '1976 – 2008',
     story:
       "Le roi de la nuit chez Leica. À f/1, l'image baigne dans un glow onirique, le vignettage est massif et la zone de netteté se réduit à un fil. Un rendu immédiatement reconnaissable.",
+    signature: '« La nuit lui appartient, à f/1. »',
     scene: 'night',
     accent: '#ffd894',
+    three: {
+      palette: ['#ffdc96', '#ffc06e', '#b4c8ff'],
+      swirl: 0.2,
+      size: 0.75,
+      ring: false,
+      glow: 0.95,
+      haze: 0.12,
+    },
     traits: [
       ['Halo / glow', 0.95],
       ['Vignettage', 0.65],
       ['Douceur des bords', 0.45],
+      ['Tourbillon', 0.25],
+      ['Aberration chromatique', 0.25],
+      ['Grain', 0.15],
     ],
   },
   {
@@ -90,12 +152,24 @@ export const lenses = [
     era: '1961 – 1970',
     story:
       "Quasi mythique, très peu produit. À f/0.95, le monde devient un rêve : halos généreux, contraste évanescent, netteté fragile. C'est précisément ce voile onirique qui fait sa légende.",
+    signature: '« Le monde, vu à travers un rêve. »',
     scene: 'dream',
     accent: '#f2ddd2',
+    three: {
+      palette: ['#ffeed6', '#ffd8e4', '#dee4ff'],
+      swirl: 0.25,
+      size: 1.1,
+      ring: false,
+      glow: 1.0,
+      haze: 0.3,
+    },
     traits: [
       ['Halo / glow', 1.0],
       ['Douceur des bords', 0.8],
       ['Aberration chromatique', 0.5],
+      ['Vignettage', 0.5],
+      ['Tourbillon', 0.3],
+      ['Grain', 0.2],
     ],
   },
   {
@@ -106,12 +180,24 @@ export const lenses = [
     era: '1964 – 1975',
     story:
       "Son verre au thorium, légèrement radioactif, jaunit avec les décennies et donne aux images une chaleur dorée inimitable. Construction magnifique, mise au point soyeuse.",
+    signature: "« L'or du thorium, patiné par soixante ans. »",
     scene: 'gold',
     accent: '#ffc55e',
+    three: {
+      palette: ['#ffcb6e', '#ffab46', '#ffe4a0'],
+      swirl: 0.05,
+      size: 0.6,
+      ring: false,
+      glow: 0.4,
+      haze: 0.15,
+    },
     traits: [
       ['Dérive chaude', 1.0],
       ['Halo / glow', 0.35],
       ['Vignettage', 0.3],
+      ['Douceur des bords', 0.2],
+      ['Aberration chromatique', 0.15],
+      ['Grain', 0.15],
     ],
   },
   {
@@ -122,12 +208,23 @@ export const lenses = [
     era: '1977 – 1997',
     story:
       "Conçu pour photographier la nuit : sa lentille asphérique polie à la main dompte le coma des points lumineux. Contraste élevé pour son époque, léger halo à pleine ouverture.",
+    signature: '« Des étoiles nettes, un contraste qui mord. »',
     scene: 'stars',
     accent: '#aec6ff',
+    three: {
+      palette: ['#f4f4fa', '#ffe4aa', '#aec6ff'],
+      swirl: 0.0,
+      size: 0.18,
+      ring: false,
+      glow: 0.45,
+      haze: 0,
+    },
     traits: [
       ['Micro-contraste', 0.85],
       ['Halo / glow', 0.55],
+      ['Vignettage', 0.4],
       ['Grain', 0.3],
+      ['Douceur des bords', 0.15],
     ],
   },
   {
@@ -138,12 +235,24 @@ export const lenses = [
     era: '1956 – aujourd’hui',
     story:
       "Les zooms de cinéma légendaires de Pierre Angénieux, utilisés d'Hollywood à la Nouvelle Vague. Rendu ciné par excellence : contraste doux, couleurs chaudes, grain présent.",
+    signature: '« Hollywood et la Nouvelle Vague dans le même zoom. »',
     scene: 'cine',
     accent: '#f0a868',
+    three: {
+      palette: ['#ffbe78', '#78bebe', '#ffe0b4'],
+      swirl: 0.05,
+      size: 0.65,
+      ring: false,
+      glow: 0.45,
+      haze: 0.1,
+    },
     traits: [
-      ['Grain', 0.6],
       ['Virage ciné', 0.85],
+      ['Grain', 0.6],
+      ['Halo / glow', 0.45],
       ['Dérive chaude', 0.4],
+      ['Vignettage', 0.35],
+      ['Douceur des bords', 0.25],
     ],
   },
 ]

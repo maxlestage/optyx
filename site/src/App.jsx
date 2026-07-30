@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { lenses } from './lenses.js'
 import Scene from './Scene.jsx'
+import Hero3D from './Hero3D.jsx'
 
 function TraitBar({ label, value }) {
   return (
@@ -24,6 +26,7 @@ function LensCard({ lens, index }) {
         </div>
       </div>
       <div className="card-body">
+        <p className="card-signature">{lens.signature}</p>
         <p className="card-meta">
           <span>{lens.origin}</span>
           <span>{lens.era}</span>
@@ -40,6 +43,11 @@ function LensCard({ lens, index }) {
 }
 
 export default function App() {
+  const [selected, setSelected] = useState(0)
+  const [intensity, setIntensity] = useState(100)
+  const lens = lenses[selected]
+  const k = intensity / 100
+
   return (
     <>
       <header className="hero">
@@ -50,22 +58,44 @@ export default function App() {
           Dans votre poche.
         </h1>
         <p className="tagline">
-          9 verres mythiques simulés en temps réel dans votre iPhone,
-          en photo comme en vidéo. Le sujet reste net grâce au LiDAR,
-          l'arrière-plan prend le caractère du verre.
+          9 verres mythiques simulés en temps réel dans votre iPhone, en photo
+          comme en vidéo. Essayez leur caractère ici même :
         </p>
-        <nav className="chips" aria-label="Les 9 objectifs">
-          {lenses.map((lens) => (
-            <a key={lens.id} className="chip" href={`#${lens.id}`}>
-              {lens.name}
-            </a>
-          ))}
-        </nav>
       </header>
 
+      <section className="playground" style={{ '--accent': lens.accent }}>
+        <Hero3D lens={lens} k={k} />
+        <div className="playground-caption">
+          <h2>{lens.name}</h2>
+          <p>{lens.signature}</p>
+        </div>
+        <nav className="chips" aria-label="Choisir un objectif">
+          {lenses.map((entry, i) => (
+            <button
+              key={entry.id}
+              className={`chip${i === selected ? ' on' : ''}`}
+              onClick={() => setSelected(i)}
+            >
+              {entry.name}
+            </button>
+          ))}
+        </nav>
+        <label className="intensity">
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={intensity}
+            onChange={(event) => setIntensity(Number(event.target.value))}
+            aria-label="Intensité de la simulation"
+          />
+          <span>{intensity} %</span>
+        </label>
+      </section>
+
       <main className="cards">
-        {lenses.map((lens, i) => (
-          <LensCard key={lens.id} lens={lens} index={i} />
+        {lenses.map((entry, i) => (
+          <LensCard key={entry.id} lens={entry} index={i} />
         ))}
       </main>
 
