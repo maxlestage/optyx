@@ -140,13 +140,15 @@ final class LensEngine {
     private func applyPunch(_ img: CIImage, lens: LensProfile, k: Double) -> CIImage {
         let strength = lens.punch * k
         guard strength > 0.02 else { return img }
+        // Coefficients francs : le passage Neutre → Summicron doit se
+        // voir immédiatement, pas s'apprécier à la loupe.
         let sharpen = CIFilter.sharpenLuminance()
         sharpen.inputImage = img
-        sharpen.sharpness = Float(0.5 * strength)
+        sharpen.sharpness = Float(0.9 * strength)
         var out = sharpen.outputImage ?? img
         let controls = CIFilter.colorControls()
         controls.inputImage = out
-        controls.contrast = Float(1.0 + 0.07 * strength)
+        controls.contrast = Float(1.0 + 0.12 * strength)
         controls.saturation = 1
         controls.brightness = 0
         out = controls.outputImage ?? out
@@ -168,7 +170,9 @@ final class LensEngine {
         let shadows = inverted(ramp(gray, from: 0.15, to: 0.55))
         let teal = CIImage(color: CIColor(red: 0, green: 0.35, blue: 0.38, alpha: 1))
             .cropped(to: img.extent)
-        let weighted = multiplied(scaled(teal, by: CGFloat(0.35 * strength)), shadows)
+        // Dose franche : le contraste orange/teal doit se reconnaître au
+        // premier regard, c'est l'affiche du profil ciné.
+        let weighted = multiplied(scaled(teal, by: CGFloat(0.50 * strength)), shadows)
             .cropped(to: img.extent)
         let screen = CIFilter.screenBlendMode()
         screen.inputImage = weighted
@@ -525,18 +529,20 @@ final class LensEngine {
         bloom.radius = Float(min(100, dim * 0.032 * (0.5 + strength)))
         guard let halo = bloom.outputImage?.cropped(to: extent) else { return img }
 
-        // VOILE ONIRIQUE (Orton) : copie floue incrustée en écran à
-        // faible dose sur tout le cadre — la promesse du Dream Lens se
-        // voit sur n'importe quelle scène, même sans haute lumière.
-        // L'incrustation écran ÉCLAIRCIT toujours, elle ne peut pas
-        // griser : rien à voir avec l'ancien voile laiteux qui remplaçait
-        // l'image par sa version bloomée.
+        // VOILE ONIRIQUE (Orton) : copie floue incrustée en écran sur
+        // tout le cadre — la promesse du Dream Lens se voit sur n'importe
+        // quelle scène, même sans haute lumière. Réservé aux VRAIS
+        // rêveurs (glow > 0,6 : Noctilux, Dream Lens) pour que Trioplan
+        // et Noct-Nikkor gardent leur identité nette. L'incrustation
+        // écran ÉCLAIRCIT toujours, elle ne peut pas griser : rien à voir
+        // avec l'ancien voile laiteux qui remplaçait l'image par sa
+        // version bloomée.
         var out = img
-        if strength > 0.3 {
+        if strength > 0.6 {
             let dreamy = img.clampedToExtent()
                 .applyingGaussianBlur(sigma: dim * 0.012 * strength)
                 .cropped(to: extent)
-            let veil = dimmed(dreamy, to: 0.30 * CGFloat(strength))
+            let veil = dimmed(dreamy, to: 0.35 * CGFloat(strength))
             let orton = CIFilter.screenBlendMode()
             orton.inputImage = veil
             orton.backgroundImage = out
@@ -692,8 +698,10 @@ final class LensEngine {
         guard let gray = mono.outputImage else { return img }
 
         // Recentre le bruit autour du gris moyen avec une amplitude réduite :
-        // out = 0.5 + (bruit − 0.5) × amplitude
-        let amp = CGFloat(0.35 * strength)
+        // out = 0.5 + (bruit − 0.5) × amplitude. Amplitude franche : le
+        // grain ciné de l'Angénieux est une texture qui se voit, pas un
+        // soupçon.
+        let amp = CGFloat(0.50 * strength)
         let matrix = CIFilter.colorMatrix()
         matrix.inputImage = gray
         matrix.rVector = CIVector(x: amp, y: 0, z: 0, w: 0)
