@@ -1,0 +1,6 @@
+# Déploiement conteneur Heroku : le processus web est l'image du
+# Dockerfile racine (site vitrine). Prérequis, une seule fois :
+#   heroku stack:set container -a <nom-de-l-app>
+build:
+  docker:
+    web: Dockerfile
