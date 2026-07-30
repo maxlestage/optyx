@@ -522,7 +522,10 @@ final class LensEngine {
         let highlights = ramp(source, from: 0.55, to: 0.92)
         let bloom = CIFilter.bloom()
         bloom.inputImage = highlights.clampedToExtent()
-        bloom.intensity = Float(2.5 * strength)
+        // Intensité contenue : le halo est une aura, pas un projecteur —
+        // à 2,5 le débordement d'une chemise blanche dessinait un liseré
+        // d'ange autour du sujet en plein jour.
+        bloom.intensity = Float(1.6 * strength)
         // Rayon plafonné à 100 : au-delà, CIBloom sort de sa plage
         // documentée — sur un export 3200 px le rayon calculé la
         // dépassait, halo incohérent entre viseur et photo enregistrée.
@@ -542,19 +545,27 @@ final class LensEngine {
             let dreamy = img.clampedToExtent()
                 .applyingGaussianBlur(sigma: dim * 0.012 * strength)
                 .cropped(to: extent)
-            let veil = dimmed(dreamy, to: 0.35 * CGFloat(strength))
+            let veil = dimmed(dreamy, to: 0.28 * CGFloat(strength))
             let orton = CIFilter.screenBlendMode()
             orton.inputImage = veil
             orton.backgroundImage = out
             out = orton.outputImage ?? out
         }
 
-        // HALATION = DÉBORDEMENT : le halo ne s'ajoute qu'en dehors des
-        // zones claires qui l'engendrent. Incruster le bloom d'une plage
-        // ou d'un ciel entiers sur eux-mêmes noyait les scènes de jour
-        // sous une marée blanche ; le rim d'une lampe qui déborde dans
-        // l'ombre, lui, est intact — c'est ça, la halation.
-        let spill = multiplied(halo, inverted(highlights)).cropped(to: extent)
+        // HALATION = DÉBORDEMENT DANS L'OMBRE : le halo ne s'ajoute
+        // qu'en dehors des zones claires qui l'engendrent, ET pondéré par
+        // l'obscurité de la zone qui le reçoit — une lampe déborde
+        // pleinement dans une pièce sombre, à peine sur une mer de midi.
+        // Incruster le bloom d'une plage entière sur elle-même noyait les
+        // photos de jour sous une marée blanche.
+        let luma = CIFilter.colorControls()
+        luma.inputImage = img
+        luma.saturation = 0
+        let ambient = (luma.outputImage ?? img).clampedToExtent()
+            .applyingGaussianBlur(sigma: dim * 0.03)
+            .cropped(to: extent)
+        let spill = multiplied(multiplied(halo, inverted(highlights)),
+                               inverted(ambient)).cropped(to: extent)
 
         let weighted = customMask.map {
             multiplied(spill, boosted($0, floor: 0.35)).cropped(to: extent)
@@ -797,8 +808,11 @@ final class LensEngine {
 
         let threshold = CIFilter.colorThreshold()
         threshold.inputImage = gray
-        // Assez bas pour que les lampes et reflets d'intérieur comptent.
-        threshold.threshold = 0.50
+        // Seuil EXIGEANT : seuls les vrais éclats (lampes, guirlandes,
+        // reflets spéculaires) comptent. Un seuil bas transformait les
+        // détails clairs des photos de jour en fausses sources — anneaux
+        // dessinés sur les nuages, chapelets sur les surfaces striées.
+        threshold.threshold = 0.70
         guard let thresholded = threshold.outputImage else { return nil }
 
         // Ouverture (érosion puis dilatation légèrement plus large) :
@@ -825,7 +839,10 @@ final class LensEngine {
         let surroundings = gray.clampedToExtent()
             .applyingGaussianBlur(sigma: Double(openRadius) * 3.0)
             .cropped(to: extent)
-        let isolation = ramp(inverted(surroundings), from: 0.35, to: 0.60)
+        // Rampe stricte : l'entourage doit être franchement sombre. Un
+        // éclat niché dans un environnement moyen (horizon, mer de jour)
+        // ne fait pas de bulle — sur un vrai objectif non plus.
+        let isolation = ramp(inverted(surroundings), from: 0.45, to: 0.70)
         return multiplied(compact, isolation).cropped(to: extent)
     }
 
