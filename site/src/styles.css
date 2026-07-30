@@ -1,0 +1,287 @@
+/* Optyx — mobile first. Base : petit écran ; les media queries
+   n'élargissent que la mise en page, jamais le contenu. */
+
+:root {
+  --orange: #ff9f0a;
+  --bg: #000;
+  --panel: #131313;
+  --text: #f4f2ee;
+  --muted: #a8a29a;
+  --radius: 20px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: radial-gradient(120% 50% at 50% -5%, #1c1917 0%, #0a0a0a 50%, #000 100%);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  padding: max(env(safe-area-inset-top), 12px) 0 env(safe-area-inset-bottom);
+  overflow-x: hidden;
+}
+
+.accent { color: var(--orange); }
+
+/* ---- héros ---- */
+.hero {
+  padding: 40px 22px 8px;
+  text-align: center;
+}
+.brand {
+  color: var(--orange);
+  font-weight: 700;
+  letter-spacing: 0.5em;
+  text-indent: 0.5em;
+  text-transform: uppercase;
+  font-size: 0.85rem;
+  margin-bottom: 18px;
+}
+.hero h1 {
+  /* 7.2vw : marge pour les polices de secours plus larges que SF Pro,
+     la ligne « Dans votre poche. » ne doit jamais déborder. */
+  font-size: clamp(1.8rem, 7.2vw, 3.4rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.08;
+}
+.tagline {
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.55;
+  margin: 16px auto 22px;
+  max-width: 34rem;
+}
+
+/* rangée de puces défilante, comme le sélecteur de l'app */
+.chips {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 4px 22px 18px;
+  margin: 0 -22px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.chips::-webkit-scrollbar { display: none; }
+.chip {
+  flex: 0 0 auto;
+  background: #1c1c1e;
+  color: #ddd;
+  text-decoration: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 10px 16px;
+  border-radius: 999px;
+  white-space: nowrap;
+  transition: background 0.2s, color 0.2s;
+}
+.chip:active, .chip:hover {
+  background: var(--orange);
+  color: #1a1000;
+}
+
+/* ---- cartes ---- */
+.cards {
+  display: grid;
+  gap: 26px;
+  padding: 10px 18px 30px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.card {
+  background: var(--panel);
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid #222;
+  scroll-margin-top: 16px;
+}
+
+.card-scene {
+  position: relative;
+  aspect-ratio: 4 / 3;
+}
+.scene { position: absolute; inset: 0; overflow: hidden; }
+
+/* éléments de scène */
+.dot {
+  position: absolute;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 35%, currentColor 0%, transparent 70%);
+  color: #fff;
+  transform: translate(-50%, -50%);
+}
+.arc {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  aspect-ratio: 1;
+  border: 3px solid transparent;
+  border-radius: 50%;
+  filter: blur(1.5px);
+}
+.ring {
+  position: absolute;
+  aspect-ratio: 1;
+  border: 3px solid;
+  border-radius: 50%;
+  filter: blur(0.8px);
+  box-shadow: 0 0 14px currentColor;
+}
+.vignette {
+  position: absolute;
+  inset: -10%;
+  background: radial-gradient(70% 70% at 50% 46%, transparent 55%, rgba(0, 0, 0, 0.75) 100%);
+}
+.haze {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(70% 55% at 50% 40%, rgba(255, 242, 226, 0.22) 0%, transparent 70%);
+}
+.sun {
+  position: absolute;
+  right: 8%;
+  top: 12%;
+  width: 34%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 216, 130, 0.6) 0%, rgba(255, 180, 80, 0.25) 45%, transparent 70%);
+  filter: blur(4px);
+}
+.bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 14%;
+  background: #000;
+}
+.bar.top { top: 0; }
+.bar.bottom { bottom: 0; }
+.grain {
+  position: absolute;
+  inset: 0;
+  opacity: 0.35;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.card-index {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.55);
+  letter-spacing: 0.1em;
+}
+.card-title {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 14px;
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.8);
+}
+.card-title h3 {
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.card-title p {
+  color: var(--accent, var(--orange));
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-top: 2px;
+}
+
+.card-body { padding: 16px 18px 20px; }
+.card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+}
+.card-story {
+  color: #d6d2cb;
+  line-height: 1.55;
+  font-size: 0.95rem;
+}
+
+.card-traits {
+  margin-top: 14px;
+  display: grid;
+  gap: 8px;
+}
+.trait {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  gap: 12px;
+}
+.trait-label {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.trait-track {
+  height: 6px;
+  border-radius: 3px;
+  background: #262626;
+  overflow: hidden;
+}
+.trait-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--orange), var(--accent, var(--orange)));
+}
+
+/* ---- fin de page ---- */
+.outro {
+  text-align: center;
+  padding: 34px 26px 10px;
+  max-width: 36rem;
+  margin: 0 auto;
+}
+.outro h2 {
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.outro p {
+  color: var(--muted);
+  line-height: 1.55;
+  margin-top: 12px;
+  font-size: 0.95rem;
+}
+.cta {
+  display: inline-block;
+  color: #1a1000 !important;
+  background: var(--orange);
+  font-weight: 800;
+  border-radius: 999px;
+  padding: 14px 26px;
+  margin-top: 18px;
+}
+.footer {
+  text-align: center;
+  color: #6e6862;
+  font-size: 0.8rem;
+  padding: 30px 20px 26px;
+}
+
+/* ---- écrans plus larges : la grille s'étale, le contenu ne change pas ---- */
+@media (min-width: 700px) {
+  .cards { grid-template-columns: repeat(2, 1fr); }
+  .hero { padding-top: 64px; }
+  .chips { justify-content: center; flex-wrap: wrap; overflow: visible; }
+}
+@media (min-width: 1024px) {
+  .cards { grid-template-columns: repeat(3, 1fr); }
+}
