@@ -65,8 +65,8 @@ final class LensEngine {
                          customMask: effectMask, bands: bands)
         img = applyEdgeSoftness(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
                                 customMask: effectMask)
-        img = applyBubbleBokeh(img, lens: lens, k: k, extent: extent, dim: dim,
-                               customMask: effectMask, bands: bands)
+        img = applyHighlightBokeh(img, lens: lens, k: k, extent: extent, dim: dim,
+                                  customMask: effectMask, bands: bands)
         // Le glow reçoit lui aussi l'union : gater le halo par la seule
         // profondeur l'éteignait entièrement dans les scènes proches.
         img = applyGlow(img, lens: lens, k: k, dim: dim, extent: extent,
@@ -405,85 +405,98 @@ final class LensEngine {
         return blend.outputImage ?? img
     }
 
-    /// Bokeh « bulles de savon » : les hautes lumières sont dilatées en
-    /// disques dont on ne garde que le contour, incrusté en mode écran.
-    /// Avec une carte de profondeur, le diamètre des bulles croît avec la
-    /// distance au plan de netteté, comme sur un vrai objectif.
-    private func applyBubbleBokeh(_ img: CIImage, lens: LensProfile, k: Double,
-                                  extent: CGRect, dim: CGFloat,
-                                  customMask: CIImage? = nil,
-                                  bands: [(factor: Double, weight: CIImage)]? = nil) -> CIImage {
-        let strength = lens.bubble * k
-        // Les bulles sont la signature du SEUL Trioplan (1.0) : sur les
-        // autres profils (0.05–0.20), les anneaux — devenus grands et
-        // brillants — apparaissaient en fantômes octogonaux collés aux
-        // reflets du sujet, un artefact plutôt qu'un caractère.
-        guard strength > 0.3 else { return img }
+    /// Bokeh des hautes lumières : chaque point de lumière hors du plan
+    /// de netteté devient un DISQUE brillant qui garde sa couleur.
+    ///
+    /// C'est le trait le plus reconnaissable d'un objectif ouvert, et
+    /// celui qu'aucun flou ne sait produire : un flou gaussien étale un
+    /// point lumineux en tache terne, là où le verre en fait un disque
+    /// net et éclatant. Les points sont donc dilatés en disques, bordés
+    /// du liseré des verres anciens (l'aberration sphérique concentre la
+    /// lumière sur le bord) — et carrément creusés en anneau pour le
+    /// Trioplan, dont c'est la signature (« bulles de savon »).
+    ///
+    /// Avec une carte de profondeur, le diamètre croît avec la distance
+    /// au plan de netteté, comme sur un vrai objectif.
+    private func applyHighlightBokeh(_ img: CIImage, lens: LensProfile, k: Double,
+                                     extent: CGRect, dim: CGFloat,
+                                     customMask: CIImage? = nil,
+                                     bands: [(factor: Double, weight: CIImage)]? = nil) -> CIImage {
+        let strength = lens.bokeh * k
+        guard strength > 0.15 else { return img }
+        // Au-delà de la moitié, le disque est creux : c'est une bulle.
+        let hollow = lens.bubble > 0.5
 
         // Avec un masque de profondeur, seules les hautes lumières de
-        // l'ARRIÈRE-PLAN engendrent des bulles : celles du sujet (chemise
-        // blanche, reflets du visage) produisaient des anneaux collés à
-        // la silhouette au lieu de venir du fond.
+        // l'ARRIÈRE-PLAN engendrent des disques : celles du sujet
+        // (chemise blanche, reflets du visage) produisaient des taches
+        // collées à la silhouette au lieu de venir du fond.
         let source = customMask.map { multiplied(img, $0) } ?? img
         guard let highlights = pointHighlights(of: source, extent: extent, dim: dim)
         else { return img }
 
-        // Grand diamètre : les anneaux doivent se voir comme sur un vrai
-        // Trioplan, pas se deviner.
-        let baseRadius = Float(max(10, dim * 0.045))
+        // Le disque hérite de la COULEUR de sa source : bokeh chaud sous
+        // une lampe, froid sous un néon — un disque blanc uniforme
+        // trahissait immédiatement la simulation.
+        let colored = multiplied(source, highlights).cropped(to: extent)
 
-        /// Anneaux construits à partir des hautes lumières pour un diamètre donné.
-        func ringLayer(discRadius: Float) -> CIImage? {
+        let baseRadius = Float(max(6, dim * 0.030 * (0.4 + strength)))
+
+        /// Disques construits à partir des points de lumière.
+        func discLayer(radius: Float) -> CIImage? {
             let dilate = CIFilter.morphologyMaximum()
-            dilate.inputImage = highlights.clampedToExtent()
-            dilate.radius = discRadius
+            dilate.inputImage = colored.clampedToExtent()
+            dilate.radius = radius
             guard let dilated = dilate.outputImage else { return nil }
             // La morphologie de Core Image travaille sur un octogone :
-            // sans adoucissement, les « bulles » sortent à facettes. Un
-            // flou proportionnel au rayon arrondit les disques avant d'en
-            // extraire le contour.
-            let discs = dilated.applyingGaussianBlur(sigma: Double(discRadius) * 0.12)
+            // sans adoucissement, les disques sortent à facettes.
+            var discs = dilated.applyingGaussianBlur(sigma: Double(radius) * 0.14)
 
-            let ring = CIFilter.morphologyGradient()
-            ring.inputImage = discs
-            ring.radius = max(1.5, discRadius * 0.18)
-            guard var rings = ring.outputImage else { return nil }
-
-            rings = rings.applyingGaussianBlur(sigma: 1.5).cropped(to: extent)
-            return scaled(rings, by: CGFloat(min(1.0, 2.2 * strength)),
-                          tint: (r: 1.0, g: 0.96, b: 0.88))
+            let gradient = CIFilter.morphologyGradient()
+            gradient.inputImage = discs
+            gradient.radius = max(1.5, radius * 0.18)
+            if let rim = gradient.outputImage?
+                .applyingGaussianBlur(sigma: 1.5).cropped(to: extent) {
+                // Maximum et non addition : sommer deux couches ferait
+                // monter l'alpha au-dessus de 1 et le rendu prémultiplié
+                // assombrirait toute la zone.
+                discs = hollow ? rim : maxed(discs.cropped(to: extent), scaled(rim, by: 0.6))
+            }
+            return scaled(discs.cropped(to: extent),
+                          by: CGFloat(min(1.0, 1.5 * strength)))
         }
 
         guard let customMask else {
-            // Sans profondeur : une seule taille de bulles, partout.
-            guard let rings = ringLayer(discRadius: baseRadius) else { return img }
+            // Sans profondeur : une seule taille de disques, partout.
+            guard let discs = discLayer(radius: baseRadius) else { return img }
             let screen = CIFilter.screenBlendMode()
-            screen.inputImage = rings
+            screen.inputImage = discs
             screen.backgroundImage = img
             return screen.outputImage ?? img
         }
 
-        // Bulles discrètes : la variation de diamètre par bande ne se voit
-        // pas, une seule couche pondérée par la profondeur suffit
-        // (1 chaîne de morphologie au lieu de 3).
-        if strength < 0.35 {
-            guard var rings = ringLayer(discRadius: baseRadius) else { return img }
-            rings = multiplied(rings, customMask).cropped(to: extent)
+        // Sauf pour les verres les plus ouverts, la variation de diamètre
+        // d'une bande à l'autre ne se voit pas : une seule couche pondérée
+        // par la profondeur suffit — et coûte une morphologie au lieu de
+        // trois, ce qui compte dans le viseur.
+        if strength < 0.75 {
+            guard var discs = discLayer(radius: baseRadius) else { return img }
+            discs = multiplied(discs, customMask).cropped(to: extent)
             let screen = CIFilter.screenBlendMode()
-            screen.inputImage = rings
+            screen.inputImage = discs
             screen.backgroundImage = img
             return screen.outputImage ?? img
         }
 
-        // Couches de bulles réparties sur les bandes de distance partagées :
-        // proches du plan de netteté → petites, lointaines → larges.
+        // Couches réparties sur les bandes de distance partagées :
+        // proches du plan de netteté → petits disques, lointaines → larges.
         var out = img
         for band in bands ?? depthBands(customMask) {
-            guard var rings = ringLayer(discRadius: max(3, baseRadius * Float(band.factor)))
+            guard var discs = discLayer(radius: max(3, baseRadius * Float(band.factor)))
             else { continue }
-            rings = multiplied(rings, band.weight).cropped(to: extent)
+            discs = multiplied(discs, band.weight).cropped(to: extent)
             let screen = CIFilter.screenBlendMode()
-            screen.inputImage = rings
+            screen.inputImage = discs
             screen.backgroundImage = out
             out = screen.outputImage ?? out
         }
