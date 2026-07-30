@@ -84,7 +84,7 @@ extension LensProfile {
             origin: "Allemagne (RDA) · M42 / Exakta",
             era: "1916 – 1970",
             story: "Un triplet optique tout simple dont l'aberration sphérique non corrigée produit le fameux bokeh « bulles de savon » : chaque point lumineux hors mise au point devient un anneau brillant.",
-            swirl: 0.15, bubble: 1.00, softness: 0.30, glow: 0.40, vignette: 0.30,
+            swirl: 0.15, bubble: 1.00, softness: 0.30, glow: 0.45, vignette: 0.30,
             chroma: 0.45, warmth: 0.20, fade: 0.20, saturation: 1.08, grain: 0.15
         ),
 
@@ -107,7 +107,7 @@ extension LensProfile {
             origin: "Allemagne · monture M",
             era: "1976 – 2008",
             story: "Le roi de la nuit chez Leica. À f/1, l'image baigne dans un glow onirique, le vignettage est massif et la zone de netteté se réduit à un fil. Un rendu immédiatement reconnaissable.",
-            swirl: 0.25, bubble: 0.10, softness: 0.45, glow: 0.95, vignette: 0.55,
+            swirl: 0.25, bubble: 0.10, softness: 0.45, glow: 0.95, vignette: 0.65,
             chroma: 0.25, warmth: 0.10, fade: 0.15, saturation: 0.98, grain: 0.15
         ),
 
