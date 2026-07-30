@@ -549,9 +549,16 @@ final class LensEngine {
             out = orton.outputImage ?? out
         }
 
+        // HALATION = DÉBORDEMENT : le halo ne s'ajoute qu'en dehors des
+        // zones claires qui l'engendrent. Incruster le bloom d'une plage
+        // ou d'un ciel entiers sur eux-mêmes noyait les scènes de jour
+        // sous une marée blanche ; le rim d'une lampe qui déborde dans
+        // l'ombre, lui, est intact — c'est ça, la halation.
+        let spill = multiplied(halo, inverted(highlights)).cropped(to: extent)
+
         let weighted = customMask.map {
-            multiplied(halo, boosted($0, floor: 0.35)).cropped(to: extent)
-        } ?? halo
+            multiplied(spill, boosted($0, floor: 0.35)).cropped(to: extent)
+        } ?? spill
         let screen = CIFilter.screenBlendMode()
         screen.inputImage = weighted
         screen.backgroundImage = out
@@ -807,7 +814,19 @@ final class LensEngine {
         reDilate.inputImage = erode.outputImage
         reDilate.radius = openRadius * 1.2
         guard let broad = reDilate.outputImage?.cropped(to: extent) else { return nil }
-        return multiplied(thresholded, inverted(broad)).cropped(to: extent)
+        let compact = multiplied(thresholded, inverted(broad))
+
+        // Un point de lumière n'existe que SUR FOND PLUS SOMBRE — une
+        // bulle de savon n'est visible que là. L'ouverture élimine les
+        // grandes surfaces mais laisse passer leurs bords fins et longs
+        // (festons de nuages, reflets du sable mouillé), qui se faisaient
+        // cercler. L'entourage moyen (grand flou) tranche : entourage
+        // clair → pas un point, juste le détail d'une surface claire.
+        let surroundings = gray.clampedToExtent()
+            .applyingGaussianBlur(sigma: Double(openRadius) * 3.0)
+            .cropped(to: extent)
+        let isolation = ramp(inverted(surroundings), from: 0.35, to: 0.60)
+        return multiplied(compact, isolation).cropped(to: extent)
     }
 
     /// Union de deux masques : maximum pixel à pixel.
