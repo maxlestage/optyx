@@ -37,6 +37,22 @@ function LensCard({ lens, index }) {
             <TraitBar key={label} label={label} value={value} />
           ))}
         </div>
+        <details className="card-more">
+          <summary>Fiche technique &amp; anecdotes</summary>
+          <dl className="specs">
+            {lens.specs.map(([label, value]) => (
+              <div key={label}>
+                <dt>{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+          <ul className="facts">
+            {lens.facts.map((fact) => (
+              <li key={fact}>{fact}</li>
+            ))}
+          </ul>
+        </details>
       </div>
     </article>
   )
