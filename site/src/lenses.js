@@ -15,7 +15,7 @@ export const lenses = [
     signature: "« L'arrière-plan tournoie. Littéralement. »",
     scene: 'swirl',
     accent: '#b8d977',
-    three: { palette: ['#d7f0a4', '#f0e0a0', '#a8c877'], sprite: 'disc', swirl: 1.0, size: 0.5, glow: 0.3, haze: 0.05 },
+    three: { palette: ['#dff5ab', '#f4e4a6', '#b6d47f'], swirl: 1.0, size: 0.55, rim: 0.38, soft: 0.30, fringe: 0.055, cat: 0.62, haze: 0.04 },
     specs: [
       ['Formule optique', "6 éléments en 4 groupes (double Gauss)"],
       ['Diaphragme', "8 lamelles"],
@@ -50,7 +50,7 @@ export const lenses = [
     signature: '« Le même vertige, en gants de velours. »',
     scene: 'swirl-soft',
     accent: '#a8c4b8',
-    three: { palette: ['#d4e8d8', '#e8e4cc', '#b8ccc0'], sprite: 'disc', swirl: 0.6, size: 0.55, breathe: true, haze: 0.1 },
+    three: { palette: ['#dcecdf', '#efe9d2', '#bfd3c6'], swirl: 0.68, size: 0.6, rim: 0.28, soft: 0.42, fringe: 0.04, cat: 0.5, breathe: true, haze: 0.08 },
     specs: [
       ['Formule optique', "6 éléments en 4 groupes (double Gauss)"],
       ['Conception', "Willy Merté, Carl Zeiss Iéna, 1936"],
@@ -83,7 +83,7 @@ export const lenses = [
     signature: '« Chaque lumière devient une bulle de savon. »',
     scene: 'bubbles',
     accent: '#e8c98a',
-    three: { palette: ['#f4e2b8', '#f0c070', '#ffe8c8'], sprite: 'ring', rise: true, size: 0.95, haze: 0.05 },
+    three: { palette: ['#ffe9c0', '#f6c874', '#fff2d8'], ring: 1.0, rise: 0.34, size: 0.95, rim: 0.8, soft: 0.16, fringe: 0.06, cat: 0.22, haze: 0.04 },
     specs: [
       ['Formule optique', "3 éléments en 3 groupes (triplet de Cooke)"],
       ['Diaphragme', "jusqu'à 15 lamelles"],
@@ -116,7 +116,7 @@ export const lenses = [
     signature: "« Le piqué qui a écrit l'histoire du reportage. »",
     scene: 'crisp',
     accent: '#e8e4dc',
-    three: { palette: ['#f0ede4', '#ffe0aa', '#c2d4ec'], sprite: 'disc', size: 0.2, twinkle: true, haze: 0 },
+    three: { palette: ['#f4f1e8', '#ffe4b4', '#c8d8ee'], size: 0.24, rim: 0.16, soft: 0.12, fringe: 0.012, cat: 0.14, twinkle: 0.32, haze: 0 },
     specs: [
       ['Formule optique', "7 éléments en 6 groupes"],
       ['Verre', "verres au lanthane haute réfraction"],
@@ -148,7 +148,7 @@ export const lenses = [
     signature: '« La nuit lui appartient, à f/1. »',
     scene: 'night',
     accent: '#ffd894',
-    three: { palette: ['#ffdc96', '#ffc06e', '#b4c8ff'], sprite: 'disc', swirl: 0.15, size: 0.8, breathe: true, haze: 0.12 },
+    three: { palette: ['#ffe0a2', '#ffc478', '#bcd0ff'], swirl: 0.2, size: 0.88, rim: 0.42, soft: 0.46, fringe: 0.045, cat: 0.56, breathe: true, haze: 0.14 },
     specs: [
       ['Formule optique', "7 éléments en 6 groupes, sans asphérique"],
       ['Conception', "Walter Mandler, Leitz Canada, 1976"],
@@ -181,7 +181,7 @@ export const lenses = [
     signature: '« Le monde, vu à travers un rêve. »',
     scene: 'dream',
     accent: '#f2ddd2',
-    three: { palette: ['#ffeed6', '#ffd8e4', '#dee4ff'], sprite: 'disc', swirl: 0.2, size: 1.15, breathe: true, haze: 0.3 },
+    three: { palette: ['#fff2df', '#ffdce8', '#e4e9ff'], swirl: 0.22, size: 1.2, rim: 0.2, soft: 0.72, fringe: 0.075, cat: 0.44, breathe: true, haze: 0.3 },
     specs: [
       ['Formule optique', "7 éléments en 5 groupes"],
       ['Monture', "baïonnette du télémétrique Canon 7"],
@@ -214,7 +214,7 @@ export const lenses = [
     signature: "« L'or du thorium, patiné par soixante ans. »",
     scene: 'gold',
     accent: '#ffc55e',
-    three: { palette: ['#ffcb6e', '#ffab46', '#ffe4a0'], sprite: 'disc', swirl: 0.05, size: 0.6, sun: true, haze: 0.15 },
+    three: { palette: ['#ffd07a', '#ffb152', '#ffe9ae'], swirl: 0.06, size: 0.62, rim: 0.32, soft: 0.4, fringe: 0.03, cat: 0.3, sun: true, haze: 0.16 },
     specs: [
       ['Formule optique', "7 éléments en 6 groupes (version courante)"],
       ['Particularité', "verre au thorium légèrement radioactif"],
@@ -247,7 +247,7 @@ export const lenses = [
     signature: '« Des étoiles nettes, un contraste qui mord. »',
     scene: 'stars',
     accent: '#aec6ff',
-    three: { palette: ['#f4f4fa', '#ffe4aa', '#aec6ff'], sprite: 'cross', size: 0.3, twinkle: true, haze: 0 },
+    three: { palette: ['#f8f8ff', '#ffe8b4', '#b4caff'], size: 0.3, rim: 0.14, soft: 0.1, fringe: 0.018, cat: 0.1, twinkle: 0.45, spike: 0.55, haze: 0 },
     specs: [
       ['Formule optique', "7 éléments en 6 groupes, lentille frontale asphérique"],
       ['Fabrication', "asphérique polie À LA MAIN par des maîtres opticiens"],
@@ -279,7 +279,7 @@ export const lenses = [
     signature: '« Hollywood et la Nouvelle Vague dans le même zoom. »',
     scene: 'cine',
     accent: '#f0a868',
-    three: { palette: ['#ffbe78', '#ffe0b4'], duo: ['#78bebe', '#8ad4d4'], sprite: 'disc', pan: true, size: 0.65, bars: true, grain: true, haze: 0.1 },
+    three: { palette: ['#ffc684', '#ffe6c0'], duo: ['#7cc4c4', '#9adcdc'], pan: 0.55, size: 0.7, rim: 0.26, soft: 0.46, fringe: 0.035, cat: 0.36, bars: true, grain: true, haze: 0.1 },
     specs: [
       ['Gamme', "zooms ciné 35 mm et 16 mm (dont le 25–250 mm)"],
       ['Inventions', "rétrofocus (1950), zooms 10× (années 1960)"],

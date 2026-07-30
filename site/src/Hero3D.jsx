@@ -1,178 +1,295 @@
-// Héros React Three Fiber : chaque objectif a SA scène — sprites,
-// mouvement, couches et ambiance propres — pilotée par `lens.three` :
-//   sprite  : 'disc' | 'ring' | 'cross'   (bokeh, bulle, étoile à branches)
-//   swirl   : vitesse de spirale          (Helios, Biotar)
-//   rise    : les particules flottent     (Trioplan)
-//   twinkle : scintillement rapide        (Noct-Nikkor, Summicron)
-//   pan     : travelling latéral ciné     (Angénieux)
-//   breathe : halo qui respire            (Noctilux, Dream Lens)
-//   sun     : disque solaire doré         (Takumar)
-//   duo     : second nuage à contre-teinte (orange/teal Angénieux)
-// L'intensité k (0–1) module tout, comme dans l'app.
+// Héros React Three Fiber : un vrai bokeh d'objectif, rendu par shader.
+//
+// Chaque particule n'est pas un rond flou mais un disque de bokeh avec
+// ses traits optiques : liseré plus lumineux au bord (aberration
+// sphérique), frange chromatique, et surtout ŒIL DE CHAT — le disque
+// rogné en amande vers les coins du cadre, exactement ce que produit
+// une optique très ouverte, et ce qui donne naissance au tourbillon.
+//
+// Le mouvement vit aussi dans le shader : rotation DIFFÉRENTIELLE (les
+// bords tournent plus vite que le centre, comme un vrai swirl), montée
+// des bulles par particule, travelling ciné. Trois couches de
+// profondeur donnent le relief, et tout se fond en douceur d'un
+// objectif à l'autre.
 import { Component, useMemo, useRef } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 
-function makeSprite(kind) {
-  const size = 128
-  const canvas = document.createElement('canvas')
-  canvas.width = canvas.height = size
-  const ctx = canvas.getContext('2d')
-  const c = size / 2
-  if (kind === 'ring') {
-    const grad = ctx.createRadialGradient(c, c, c * 0.55, c, c, c * 0.95)
-    grad.addColorStop(0, 'rgba(255,255,255,0)')
-    grad.addColorStop(0.55, 'rgba(255,255,255,0.95)')
-    grad.addColorStop(1, 'rgba(255,255,255,0)')
-    ctx.fillStyle = grad
-    ctx.fillRect(0, 0, size, size)
-  } else if (kind === 'cross') {
-    // Étoile à quatre branches : le coma dompté du Noct-Nikkor.
-    const grad = ctx.createRadialGradient(c, c, 0, c, c, c * 0.3)
-    grad.addColorStop(0, 'rgba(255,255,255,1)')
-    grad.addColorStop(1, 'rgba(255,255,255,0)')
-    ctx.fillStyle = grad
-    ctx.fillRect(0, 0, size, size)
-    ctx.strokeStyle = 'rgba(255,255,255,0.85)'
-    ctx.lineWidth = 3
-    ctx.beginPath()
-    ctx.moveTo(c, 6)
-    ctx.lineTo(c, size - 6)
-    ctx.moveTo(6, c)
-    ctx.lineTo(size - 6, c)
-    ctx.stroke()
-  } else {
-    const grad = ctx.createRadialGradient(c, c, 0, c, c, c)
-    grad.addColorStop(0, 'rgba(255,255,255,1)')
-    grad.addColorStop(0.5, 'rgba(255,255,255,0.55)')
-    grad.addColorStop(1, 'rgba(255,255,255,0)')
-    ctx.fillStyle = grad
-    ctx.fillRect(0, 0, size, size)
-  }
-  const texture = new THREE.CanvasTexture(canvas)
-  texture.needsUpdate = true
-  return texture
-}
+const VERTEX = /* glsl */ `
+  attribute vec3 aColor;
+  attribute float aPhase;
 
-function makeField(seedStart, count, spreadY = 0.72) {
+  uniform float uTime;
+  uniform float uSize;
+  uniform float uPixelRatio;
+  uniform float uSwirl;
+  uniform float uRise;
+  uniform float uPan;
+  uniform float uTwinkle;
+
+  varying vec3 vColor;
+  varying vec2 vNdc;
+  varying float vFade;
+
+  const float TAU = 6.2831853;
+
+  // Réduction d'argument maison : sur GPU, sin() et cos() perdent toute
+  // précision — voire renvoient n'importe quoi — passé quelques
+  // milliers de radians. Or l'angle de rotation croît avec le temps :
+  // sans ce repli dans [0, 2π), l'animation se fige ou s'efface après
+  // quelques minutes d'affichage.
+  float wrap(float x) {
+    return fract(x / TAU) * TAU;
+  }
+
+  void main() {
+    vColor = aColor;
+    vec3 pos = position;
+
+    // Rotation différentielle : l'amplitude croît avec le rayon — le
+    // champ s'enroule au lieu de tourner en bloc.
+    float radius = length(pos.xy);
+    float angle = wrap(uSwirl * uTime * (0.18 + 0.10 * radius));
+    float c = cos(angle);
+    float s = sin(angle);
+    pos.xy = vec2(pos.x * c - pos.y * s, pos.x * s + pos.y * c);
+
+    // Bulles : chaque particule monte à son propre rythme et reboucle.
+    // Réservé aux profils qui montent — ailleurs, ce décalage ne ferait
+    // que déséquilibrer la répartition d'origine.
+    pos.y += (mod(uTime * uRise + aPhase * 4.0, 4.0) - 2.0) * step(0.001, uRise);
+
+    // Travelling latéral (rendu ciné).
+    pos.x += sin(wrap(uTime * 0.12 + aPhase * 2.0)) * uPan;
+
+    vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+    vec4 proj = projectionMatrix * mv;
+
+    // Position à l'écran (-1…1) : sert à l'œil de chat, qui dépend de
+    // la distance au centre du cadre.
+    vNdc = proj.xy / proj.w;
+
+    // Scintillement : les points fins vibrent, les grosses orbes non.
+    vFade = 1.0 - uTwinkle * (0.5 + 0.5 * sin(wrap(uTime * 4.5 + aPhase * TAU)));
+
+    // Taille : variée par particule, atténuée par la distance.
+    float variety = 0.65 + 0.7 * fract(aPhase * 7.31);
+    gl_PointSize = uSize * uPixelRatio * variety * (120.0 / max(0.001, -mv.z));
+    gl_Position = proj;
+  }
+`
+
+const FRAGMENT = /* glsl */ `
+  precision highp float;
+
+  uniform float uOpacity;
+  uniform float uRing;    // 0 = disque plein, 1 = bulle de savon
+  uniform float uRim;     // liseré lumineux du bord
+  uniform float uSoft;    // douceur du bord
+  uniform float uFringe;  // frange chromatique
+  uniform float uCat;     // œil de chat vers les coins
+  uniform float uSpike;   // aigrettes d'étoile
+
+  varying vec3 vColor;
+  varying vec2 vNdc;
+  varying float vFade;
+
+  // Profil d'un disque de bokeh, évalué à une échelle donnée (c'est en
+  // faisant varier cette échelle par canal qu'on obtient la frange).
+  float bokeh(vec2 p, float scale, float ring, float soft) {
+    float r = length(p) * scale;
+    if (r > 1.0) return 0.0;
+    float body = 1.0 - smoothstep(1.0 - soft, 1.0, r);
+    float hollow = smoothstep(0.32, 0.64, r);
+    return mix(body, body * hollow, ring);
+  }
+
+  void main() {
+    vec2 p = gl_PointCoord * 2.0 - 1.0;
+    float r = length(p);
+    if (r > 1.0) discard;
+
+    // ŒIL DE CHAT : le disque est rogné par un second cercle décalé
+    // vers le centre du cadre — plus la particule est excentrée, plus
+    // elle prend la forme d'une amande. Signature des optiques rapides.
+    // Le décalage est BORNÉ : au-delà du cadre, vNdc dépasse 1 et
+    // rognerait les disques jusqu'à les effacer.
+    vec2 off = vNdc;
+    float lo = length(off);
+    off = lo > 1.0 ? off / lo : off;
+    float cut = length(p - off * uCat);
+    float cat = 1.0 - smoothstep(0.90, 1.02, cut);
+
+    float ir = bokeh(p, 1.0 - uFringe, uRing, uSoft);
+    float ig = bokeh(p, 1.0, uRing, uSoft);
+    float ib = bokeh(p, 1.0 + uFringe, uRing, uSoft);
+
+    // Liseré : l'aberration sphérique concentre la lumière sur le bord.
+    float rim = uRim * smoothstep(0.66, 0.94, r) * (1.0 - smoothstep(0.94, 1.0, r));
+
+    // Aigrettes de diffraction (étoiles).
+    float spikes = 0.0;
+    if (uSpike > 0.001) {
+      float sx = max(0.0, 1.0 - abs(p.x) * 18.0);
+      float sy = max(0.0, 1.0 - abs(p.y) * 18.0);
+      spikes = uSpike * (sx + sy) * (1.0 - r);
+    }
+
+    vec3 col = vColor * vec3(ir, ig, ib) + vColor * (rim + spikes);
+    col *= cat * uOpacity * vFade;
+    gl_FragColor = vec4(col, 1.0);
+  }
+`
+
+// Trois plans de profondeur : le premier gros et lent, le dernier fin
+// et lointain — c'est ce décalage qui donne le relief.
+const LAYERS = [
+  { count: 24, near: 1.4, far: 2.8, size: 1.5, speed: 1.15 },
+  { count: 58, near: 2.8, far: 4.8, size: 0.95, speed: 0.85 },
+  { count: 110, near: 4.8, far: 7.5, size: 0.55, speed: 0.6 },
+]
+
+function makeGeometryData(layer, seedStart) {
   let seed = seedStart
   const rand = () => {
     seed = (seed * 16807) % 2147483647
     return (seed - 1) / 2147483646
   }
+  const { count, near, far } = layer
   const positions = new Float32Array(count * 3)
+  const phases = new Float32Array(count)
   for (let i = 0; i < count; i++) {
-    const radius = 1.1 + rand() * 5.6
+    // Racine carrée : répartition uniforme sur le disque, pas d'amas
+    // au centre.
+    const radius = 0.5 + Math.sqrt(rand()) * 4.2
     const angle = rand() * Math.PI * 2
-    positions[i * 3] = Math.cos(angle) * radius
-    positions[i * 3 + 1] = Math.sin(angle) * radius * spreadY
-    positions[i * 3 + 2] = -1.5 - rand() * 5
+    // Ellipse large : le cadre du héros l'est aussi — un disque rond
+    // laisserait le haut et le bas vides, et déborderait sur les côtés.
+    positions[i * 3] = Math.cos(angle) * radius * 1.25
+    positions[i * 3 + 1] = Math.sin(angle) * radius * 0.55
+    positions[i * 3 + 2] = -(near + rand() * (far - near))
+    phases[i] = rand()
   }
-  return positions
+  return { positions, phases }
 }
 
-function colorsFor(palette, count) {
-  const array = new Float32Array(count * 3)
-  const color = new THREE.Color()
-  for (let i = 0; i < count; i++) {
-    color.set(palette[i % palette.length])
-    array[i * 3] = color.r
-    array[i * 3 + 1] = color.g
-    array[i * 3 + 2] = color.b
-  }
-  return array
-}
+const lerp = (a, b, t) => a + (b - a) * t
 
-function Cloud({ config, k, layer }) {
-  const points = useRef()
-  const count = layer === 0 ? 220 : 140
-  const positions = useMemo(
-    () => makeField(layer === 0 ? 42 : 1337, count),
-    [layer, count],
+function Layer({ config, k, index }) {
+  const layer = LAYERS[index]
+  const geometry = useRef()
+  const material = useRef()
+  const { positions, phases } = useMemo(
+    () => makeGeometryData(layer, 1000 + index * 977),
+    [layer, index],
   )
-  const palette =
-    layer === 1 && config.duo ? config.duo : config.palette
-  const colors = useMemo(() => colorsFor(palette, count), [palette, count])
-  const texture = useMemo(() => makeSprite(config.sprite), [config.sprite])
 
-  useFrame(({ clock }) => {
+  // Couleurs courantes (fondues vers la palette de l'objectif choisi).
+  const colors = useMemo(
+    () => new Float32Array(layer.count * 3),
+    [layer.count],
+  )
+  const target = useMemo(() => new THREE.Color(), [])
+
+  const uniforms = useMemo(
+    () => ({
+      uTime: { value: 0 },
+      uSize: { value: 0 },
+      uPixelRatio: { value: Math.min(2, window.devicePixelRatio || 1) },
+      uSwirl: { value: 0 },
+      uRise: { value: 0 },
+      uPan: { value: 0 },
+      uTwinkle: { value: 0 },
+      uOpacity: { value: 0 },
+      uRing: { value: 0 },
+      uRim: { value: 0 },
+      uSoft: { value: 0.5 },
+      uFringe: { value: 0 },
+      uCat: { value: 0 },
+      uSpike: { value: 0 },
+    }),
+    [],
+  )
+
+  useFrame(({ clock }, delta) => {
     const t = clock.elapsedTime
-    const p = points.current
-    if (!p) return
-    const phase = layer * Math.PI * 0.7
+    const u = uniforms
+    u.uTime.value = t
 
-    // Spirale : chaque couche tourne à sa vitesse — le fond se creuse.
-    p.rotation.z =
-      t * (0.1 + layer * 0.06) * (config.swirl ?? 0) * k
+    // Fondu doux vers les valeurs de l'objectif courant : changer de
+    // puce fait MORPHER la scène au lieu de la remplacer.
+    const ease = Math.min(1, delta * 3.2)
+    const palette = index === 1 && config.duo ? config.duo : config.palette
 
-    // Bulles qui flottent : montée lente en boucle.
-    if (config.rise) {
-      p.position.y = (((t * 0.25 * k + layer * 1.7) % 3.4) + 3.4) % 3.4 - 1.7
-    }
+    u.uSize.value = lerp(
+      u.uSize.value,
+      (config.size ?? 0.5) * (0.35 + 0.65 * k) * layer.size,
+      ease,
+    )
+    u.uSwirl.value = lerp(u.uSwirl.value, (config.swirl ?? 0) * k * layer.speed, ease)
+    u.uRise.value = lerp(u.uRise.value, (config.rise ?? 0) * k * layer.speed, ease)
+    u.uPan.value = lerp(u.uPan.value, (config.pan ?? 0) * k, ease)
+    u.uTwinkle.value = lerp(u.uTwinkle.value, (config.twinkle ?? 0) * k, ease)
+    u.uRing.value = lerp(u.uRing.value, config.ring ?? 0, ease)
+    u.uRim.value = lerp(u.uRim.value, (config.rim ?? 0.25) * k, ease)
+    u.uSoft.value = lerp(u.uSoft.value, config.soft ?? 0.35, ease)
+    u.uFringe.value = lerp(u.uFringe.value, (config.fringe ?? 0.04) * k, ease)
+    u.uCat.value = lerp(u.uCat.value, (config.cat ?? 0.35) * k, ease)
+    u.uSpike.value = lerp(u.uSpike.value, (config.spike ?? 0) * k, ease)
 
-    // Travelling ciné : balayage latéral très lent.
-    if (config.pan) {
-      p.position.x = Math.sin(t * 0.1 + phase) * 0.9 * k
-    }
+    // Respiration du halo : présence qui enfle et retombe.
+    const breathe = config.breathe
+      ? 0.8 + 0.2 * Math.sin(t * 0.7 + index * 1.1)
+      : 1
+    // Volontairement en deçà de 1 : en fusion additive, des disques qui
+    // se recouvrent saturent vite en blanc — c'est cette réserve qui
+    // garde la couleur du bokeh.
+    u.uOpacity.value = lerp(u.uOpacity.value, (0.1 + 0.42 * k) * breathe, ease)
 
-    const material = p.material
-    // Base : présence du bokeh selon l'intensité.
-    let opacity = 0.3 + 0.5 * k
-    // Respiration du halo (Noctilux, Dream Lens).
-    if (config.breathe) {
-      opacity *= 0.75 + 0.25 * Math.sin(t * 0.7 + phase)
+    // Fondu des couleurs particule par particule.
+    const attribute = geometry.current?.getAttribute('aColor')
+    if (attribute) {
+      const array = attribute.array
+      for (let i = 0; i < layer.count; i++) {
+        target.set(palette[i % palette.length])
+        const o = i * 3
+        array[o] = lerp(array[o], target.r, ease)
+        array[o + 1] = lerp(array[o + 1], target.g, ease)
+        array[o + 2] = lerp(array[o + 2], target.b, ease)
+      }
+      attribute.needsUpdate = true
     }
-    // Scintillement rapide (Noct-Nikkor, Summicron).
-    if (config.twinkle) {
-      opacity *= 0.62 + 0.38 * Math.sin(t * 5.2 + phase * 3)
-    }
-    material.opacity = opacity
-    material.size =
-      (0.24 + (config.size ?? 0.5) * 0.95 * k) *
-      (config.breathe ? 1 + 0.12 * Math.sin(t * 0.8 + phase) : 1)
   })
 
   return (
-    <points ref={points}>
-      <bufferGeometry>
+    <points>
+      <bufferGeometry ref={geometry}>
         <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-        <bufferAttribute attach="attributes-color" args={[colors, 3]} />
+        <bufferAttribute attach="attributes-aColor" args={[colors, 3]} />
+        <bufferAttribute attach="attributes-aPhase" args={[phases, 1]} />
       </bufferGeometry>
-      <pointsMaterial
-        map={texture}
-        vertexColors
+      <shaderMaterial
+        ref={material}
+        uniforms={uniforms}
+        vertexShader={VERTEX}
+        fragmentShader={FRAGMENT}
         transparent
         depthWrite={false}
         blending={THREE.AdditiveBlending}
-        sizeAttenuation
       />
     </points>
   )
 }
 
-/** Disque solaire doré du Takumar, qui palpite doucement. */
-function Sun({ k }) {
-  const mesh = useRef()
-  const texture = useMemo(() => makeSprite('disc'), [])
-  useFrame(({ clock }) => {
+/** Dérive lente de la caméra : la scène respire, jamais figée. */
+function Drift() {
+  useFrame(({ clock, camera }) => {
     const t = clock.elapsedTime
-    if (mesh.current) {
-      const scale = (2.6 + Math.sin(t * 0.5) * 0.25) * (0.4 + 0.6 * k)
-      mesh.current.scale.setScalar(scale)
-      mesh.current.material.opacity = 0.5 * k
-    }
+    camera.position.x = Math.sin(t * 0.13) * 0.35
+    camera.position.y = Math.cos(t * 0.09) * 0.22
+    camera.lookAt(0, 0, -3)
   })
-  return (
-    <sprite ref={mesh} position={[1.9, 1.1, -3]}>
-      <spriteMaterial
-        map={texture}
-        color="#ffce7a"
-        transparent
-        depthWrite={false}
-        blending={THREE.AdditiveBlending}
-      />
-    </sprite>
-  )
+  return null
 }
 
 class CanvasBoundary extends Component {
@@ -195,11 +312,13 @@ export default function Hero3D({ lens, k }) {
           camera={{ position: [0, 0, 6], fov: 50 }}
           gl={{ antialias: false, alpha: true, powerPreference: 'low-power' }}
         >
-          <Cloud config={config} k={k} layer={0} />
-          <Cloud config={config} k={k} layer={1} />
-          {config.sun ? <Sun k={k} /> : null}
+          <Drift />
+          {LAYERS.map((_, index) => (
+            <Layer key={index} config={config} k={k} index={index} />
+          ))}
         </Canvas>
       </CanvasBoundary>
+      {config.sun ? <span className="hero3d-sun" /> : null}
       <div className="hero3d-haze" />
       <div className="hero3d-vignette" />
       {config.bars ? (
