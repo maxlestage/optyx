@@ -1,6 +1,12 @@
-# Déploie le site vitrine (site/) sur GitHub Pages à chaque évolution
-# du site sur master. `enablement: true` active Pages tout seul au
-# premier passage — aucune manipulation dans les réglages du dépôt.
+# Publie le site vitrine (site/) sur GitHub Pages via la branche
+# gh-pages — la voie qui s'active toute seule sur un dépôt public. La
+# méthode « artefact Pages » échouait : l'activation de Pages par
+# configure-pages exige des droits d'administration que le jeton des
+# workflows n'a pas (« Resource not accessible by integration »).
+#
+# NB : les merges du bot d'auto-merge n'émettent pas d'événements de
+# workflow (jeton GITHUB_TOKEN) — le déclenchement est donc surtout
+# manuel (workflow_dispatch, y compris via l'API).
 # URL : https://maxlestage.github.io/optyx/
 name: Déploiement du site
 
@@ -13,16 +19,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,20 +40,13 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run build
-      - name: Configurer GitHub Pages
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site/dist
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Publier sur gh-pages
+        working-directory: site/dist
+        run: |
+          touch .nojekyll
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Site vitrine — ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
