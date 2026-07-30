@@ -210,6 +210,18 @@ final class LensEngine {
 
         /// Copie tourbillonnée pour une amplitude donnée (1 = nominale).
         func swirledLayer(amplitude: Double) -> CIImage? {
+            // TORSION GÉOMÉTRIQUE d'abord : la scène tourne réellement
+            // autour du centre — visible même sur les aplats sans hautes
+            // lumières (mur, ciel), là où le filé de rotation seul n'était
+            // qu'un flou de plus. Le centre du cadre est protégé par les
+            // masques de mélange, seule la couronne se tord.
+            let twirl = CIFilter.twirlDistortion()
+            twirl.inputImage = clamped
+            twirl.center = center
+            twirl.radius = Float(dim * 1.3)
+            twirl.angle = Float(0.9 * strength * min(amplitude, 1.2))
+            let base = twirl.outputImage?.clampedToExtent() ?? clamped
+
             // 0.38 rad (~22°) : la rotation moyenne est géométriquement
             // nulle au centre du cadre (sujet, horizon) — les hautes
             // lumières de l'arrière-plan doivent s'étirer en ARCS francs,
@@ -247,7 +259,7 @@ final class LensEngine {
                 let transform = CGAffineTransform(translationX: center.x, y: center.y)
                     .rotated(by: angle)
                     .translatedBy(x: -center.x, y: -center.y)
-                let rotated = clamped.transformed(by: transform).cropped(to: extent)
+                let rotated = base.transformed(by: transform).cropped(to: extent)
                 if let acc = accumulated {
                     let mix = CIFilter.dissolveTransition()
                     mix.inputImage = acc
@@ -270,6 +282,52 @@ final class LensEngine {
             return swirled.clampedToExtent()
                 .applyingGaussianBlur(sigma: sigma)
                 .cropped(to: extent)
+        }
+
+        /// Arcs lumineux incrustés par-dessus le filé : les hautes
+        /// lumières PONCTUELLES s'étirent en arcs brillants autour du
+        /// centre — la signature visible du tourbillon, celle des visuels,
+        /// même quand le filé des textures reste discret.
+        func arcOverlay(on result: CIImage, mask: CIImage?) -> CIImage {
+            guard strength > 0.3,
+                  let points = pointHighlights(of: img, extent: extent, dim: dim)
+            else { return result }
+            let colored = multiplied(img, points).cropped(to: extent)
+            let maxAngle = 0.38 * strength
+            let count = 14
+            let offsets = (0..<count).map { -1.0 + 2.0 * Double($0) / Double(count - 1) }
+            var accumulated: CIImage?
+            for (index, offset) in offsets.enumerated() {
+                let angle = CGFloat(offset * maxAngle)
+                let transform = CGAffineTransform(translationX: center.x, y: center.y)
+                    .rotated(by: angle)
+                    .translatedBy(x: -center.x, y: -center.y)
+                let rotated = colored.clampedToExtent()
+                    .transformed(by: transform).cropped(to: extent)
+                if let acc = accumulated {
+                    let mix = CIFilter.dissolveTransition()
+                    mix.inputImage = acc
+                    mix.targetImage = rotated
+                    mix.time = Float(1.0 / Double(index + 1))
+                    accumulated = mix.outputImage ?? acc
+                } else {
+                    accumulated = rotated
+                }
+            }
+            guard var arcs = accumulated else { return result }
+            arcs = arcs.clampedToExtent().applyingGaussianBlur(sigma: 2.5)
+                .cropped(to: extent)
+            // La moyenne dilue chaque point sur la longueur de l'arc :
+            // gain de compensation — l'incrustation écran plafonne en
+            // douceur, pas de brûlure possible.
+            arcs = dimmed(arcs, to: CGFloat(count) * 0.45)
+            if let mask {
+                arcs = multiplied(arcs, mask).cropped(to: extent)
+            }
+            let screen = CIFilter.screenBlendMode()
+            screen.inputImage = arcs
+            screen.backgroundImage = result
+            return screen.outputImage ?? result
         }
 
         if let customMask {
@@ -295,7 +353,7 @@ final class LensEngine {
                 blend.maskImage = band.weight
                 out = blend.outputImage ?? out
             }
-            return out
+            return arcOverlay(on: out, mask: customMask)
         }
 
         guard let swirled = swirledLayer(amplitude: 1.0) else { return img }
@@ -307,7 +365,7 @@ final class LensEngine {
         blend.inputImage = swirled
         blend.backgroundImage = img
         blend.maskImage = mask
-        return blend.outputImage ?? img
+        return arcOverlay(on: blend.outputImage ?? img, mask: mask)
     }
 
     /// Perte de piqué progressive vers les bords du champ.
@@ -353,43 +411,13 @@ final class LensEngine {
         // reflets du sujet, un artefact plutôt qu'un caractère.
         guard strength > 0.3 else { return img }
 
-        let mono = CIFilter.colorControls()
         // Avec un masque de profondeur, seules les hautes lumières de
         // l'ARRIÈRE-PLAN engendrent des bulles : celles du sujet (chemise
         // blanche, reflets du visage) produisaient des anneaux collés à
         // la silhouette au lieu de venir du fond.
-        mono.inputImage = customMask.map { multiplied(img, $0) } ?? img
-        mono.saturation = 0
-        mono.contrast = 1
-        guard let gray = mono.outputImage else { return img }
-
-        // Seuil abaissé et diamètre élargi : davantage de sources de
-        // bulles, anneaux plus grands — la signature Trioplan se voit.
-        let threshold = CIFilter.colorThreshold()
-        threshold.inputImage = gray
-        // Seuil abaissé pour que les scènes d'intérieur (lampes, reflets)
-        // fournissent encore des sources de bulles.
-        threshold.threshold = 0.50
-        guard let thresholded = threshold.outputImage else { return img }
-
-        // Ne garder que les hautes lumières PONCTUELLES. Le seuil brut
-        // retient aussi les grandes plages claires (ciel, écran, chemise
-        // blanche) — la morphologie en extrayait alors le CONTOUR : gros
-        // liseré lumineux autour de ces surfaces au lieu de bulles.
-        // Une ouverture (érosion puis dilatation) efface les points mais
-        // conserve les grandes plages ; leur soustraction du masque
-        // initial isole les points seuls.
-        let openRadius = Float(max(4, dim * 0.014))
-        let erode = CIFilter.morphologyMinimum()
-        erode.inputImage = thresholded.clampedToExtent()
-        erode.radius = openRadius
-        let reDilate = CIFilter.morphologyMaximum()
-        reDilate.inputImage = erode.outputImage
-        // Légèrement plus large que l'érosion : couvre entièrement le
-        // bord des grandes plages, sinon un filet d'un pixel y survit.
-        reDilate.radius = openRadius * 1.2
-        guard let broad = reDilate.outputImage?.cropped(to: extent) else { return img }
-        let highlights = multiplied(thresholded, inverted(broad)).cropped(to: extent)
+        let source = customMask.map { multiplied(img, $0) } ?? img
+        guard let highlights = pointHighlights(of: source, extent: extent, dim: dim)
+        else { return img }
 
         // Grand diamètre : les anneaux doivent se voir comme sur un vrai
         // Trioplan, pas se deviner.
@@ -492,13 +520,31 @@ final class LensEngine {
         bloom.radius = Float(min(100, dim * 0.032 * (0.5 + strength)))
         guard let halo = bloom.outputImage?.cropped(to: extent) else { return img }
 
+        // VOILE ONIRIQUE (Orton) : copie floue incrustée en écran à
+        // faible dose sur tout le cadre — la promesse du Dream Lens se
+        // voit sur n'importe quelle scène, même sans haute lumière.
+        // L'incrustation écran ÉCLAIRCIT toujours, elle ne peut pas
+        // griser : rien à voir avec l'ancien voile laiteux qui remplaçait
+        // l'image par sa version bloomée.
+        var out = img
+        if strength > 0.3 {
+            let dreamy = img.clampedToExtent()
+                .applyingGaussianBlur(sigma: dim * 0.012 * strength)
+                .cropped(to: extent)
+            let veil = dimmed(dreamy, to: 0.30 * CGFloat(strength))
+            let orton = CIFilter.screenBlendMode()
+            orton.inputImage = veil
+            orton.backgroundImage = out
+            out = orton.outputImage ?? out
+        }
+
         let weighted = customMask.map {
             multiplied(halo, boosted($0, floor: 0.35)).cropped(to: extent)
         } ?? halo
         let screen = CIFilter.screenBlendMode()
         screen.inputImage = weighted
-        screen.backgroundImage = img
-        return screen.outputImage ?? img
+        screen.backgroundImage = out
+        return screen.outputImage ?? out
     }
 
     /// Aberration chromatique latérale : les canaux rouge et bleu sont
@@ -713,6 +759,42 @@ final class LensEngine {
         matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 0)
         matrix.biasVector = CIVector(x: floor, y: floor, z: floor, w: 1)
         return matrix.outputImage ?? mask
+    }
+
+    /// Masque des hautes lumières PONCTUELLES d'une image : seuil de
+    /// luminance puis ouverture morphologique soustraite — les points de
+    /// lumière (lampes, reflets, guirlandes) restent, les grandes plages
+    /// claires (ciel, écrans, vêtements blancs) disparaissent, elles qui
+    /// se retrouvaient sinon cerclées d'un liseré. Partagé par les bulles
+    /// de savon et les arcs du tourbillon.
+    private func pointHighlights(of img: CIImage, extent: CGRect,
+                                 dim: CGFloat) -> CIImage? {
+        let mono = CIFilter.colorControls()
+        mono.inputImage = img
+        mono.saturation = 0
+        mono.contrast = 1
+        guard let gray = mono.outputImage else { return nil }
+
+        let threshold = CIFilter.colorThreshold()
+        threshold.inputImage = gray
+        // Assez bas pour que les lampes et reflets d'intérieur comptent.
+        threshold.threshold = 0.50
+        guard let thresholded = threshold.outputImage else { return nil }
+
+        // Ouverture (érosion puis dilatation légèrement plus large) :
+        // efface les points, conserve les grandes plages — soustraites du
+        // masque initial, il ne reste que les points. La dilatation
+        // élargie couvre entièrement le bord des grandes plages, sinon un
+        // filet d'un pixel y survivrait.
+        let openRadius = Float(max(4, dim * 0.014))
+        let erode = CIFilter.morphologyMinimum()
+        erode.inputImage = thresholded.clampedToExtent()
+        erode.radius = openRadius
+        let reDilate = CIFilter.morphologyMaximum()
+        reDilate.inputImage = erode.outputImage
+        reDilate.radius = openRadius * 1.2
+        guard let broad = reDilate.outputImage?.cropped(to: extent) else { return nil }
+        return multiplied(thresholded, inverted(broad)).cropped(to: extent)
     }
 
     /// Union de deux masques : maximum pixel à pixel.
