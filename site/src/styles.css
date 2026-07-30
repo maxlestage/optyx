@@ -452,6 +452,15 @@ body {
   font-size: 0.8rem;
   padding: 30px 20px 26px;
 }
+.credit {
+  color: var(--text);
+  font-size: 0.95rem;
+  margin-bottom: 8px;
+}
+.credit strong {
+  color: var(--orange);
+  font-weight: 700;
+}
 
 /* ---- écrans plus larges : la grille s'étale, le contenu ne change pas ---- */
 @media (min-width: 700px) {

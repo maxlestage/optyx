@@ -135,6 +135,9 @@ export default function App() {
       </section>
 
       <footer className="footer">
+        <p className="credit">
+          Conçu et développé par <strong>Maxime Nathan Lestage</strong>
+        </p>
         <p>© 2026 Optyx — Objectifs vintage simulés.</p>
       </footer>
     </>
