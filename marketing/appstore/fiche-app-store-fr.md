@@ -68,7 +68,7 @@ Les limites de caractères d'Apple sont indiquées et respectées.
 | Classification d'âge | 4+ (aucun contenu sensible) |
 | Prix | à décider (gratuit conseillé pour le lancement) |
 | URL d'assistance | https://github.com/maxlestage/optyx (ou votre site) |
-| Copyright | © 2026 Max Lestage |
+| Copyright | © 2026 Maxime Nathan Lestage |
 
 ## Confidentialité de l'app (questionnaire App Privacy)
 
