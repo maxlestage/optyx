@@ -144,11 +144,11 @@ final class LensEngine {
         // voir immédiatement, pas s'apprécier à la loupe.
         let sharpen = CIFilter.sharpenLuminance()
         sharpen.inputImage = img
-        sharpen.sharpness = Float(0.9 * strength)
+        sharpen.sharpness = Float(1.1 * strength)
         var out = sharpen.outputImage ?? img
         let controls = CIFilter.colorControls()
         controls.inputImage = out
-        controls.contrast = Float(1.0 + 0.12 * strength)
+        controls.contrast = Float(1.0 + 0.15 * strength)
         controls.saturation = 1
         controls.brightness = 0
         out = controls.outputImage ?? out
@@ -172,7 +172,7 @@ final class LensEngine {
             .cropped(to: img.extent)
         // Dose franche : le contraste orange/teal doit se reconnaître au
         // premier regard, c'est l'affiche du profil ciné.
-        let weighted = multiplied(scaled(teal, by: CGFloat(0.50 * strength)), shadows)
+        let weighted = multiplied(scaled(teal, by: CGFloat(0.60 * strength)), shadows)
             .cropped(to: img.extent)
         let screen = CIFilter.screenBlendMode()
         screen.inputImage = weighted
@@ -223,7 +223,7 @@ final class LensEngine {
             twirl.inputImage = clamped
             twirl.center = center
             twirl.radius = Float(dim * 1.3)
-            twirl.angle = Float(0.9 * strength * min(amplitude, 1.2))
+            twirl.angle = Float(1.15 * strength * min(amplitude, 1.2))
             let base = twirl.outputImage?.clampedToExtent() ?? clamped
 
             // 0.38 rad (~22°) : la rotation moyenne est géométriquement
@@ -545,7 +545,7 @@ final class LensEngine {
             let dreamy = img.clampedToExtent()
                 .applyingGaussianBlur(sigma: dim * 0.012 * strength)
                 .cropped(to: extent)
-            let veil = dimmed(dreamy, to: 0.28 * CGFloat(strength))
+            let veil = dimmed(dreamy, to: 0.33 * CGFloat(strength))
             let orton = CIFilter.screenBlendMode()
             orton.inputImage = veil
             orton.backgroundImage = out

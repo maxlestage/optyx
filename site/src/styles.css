@@ -55,13 +55,58 @@ body {
   max-width: 34rem;
 }
 
+/* ---- terrain de jeu 3D ---- */
+.playground {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 18px;
+}
+.hero3d {
+  position: relative;
+  height: min(52vh, 420px);
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid #222;
+  background: radial-gradient(85% 85% at 50% 42%, #191512 0%, #0b0a09 60%, #030303 100%);
+}
+.hero3d canvas { display: block; }
+.hero3d-haze {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(70% 55% at 50% 42%, rgba(255, 242, 226, 0.9) 0%, transparent 70%);
+  opacity: var(--haze, 0);
+  transition: opacity 0.4s;
+}
+.hero3d-vignette {
+  position: absolute;
+  inset: -8%;
+  pointer-events: none;
+  background: radial-gradient(72% 66% at 50% 46%, transparent 55%, rgba(0, 0, 0, 0.6) 100%);
+}
+.playground-caption {
+  text-align: center;
+  padding: 14px 6px 4px;
+}
+.playground-caption h2 {
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.playground-caption p {
+  color: var(--accent, var(--orange));
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
 /* rangée de puces défilante, comme le sélecteur de l'app */
 .chips {
   display: flex;
   gap: 10px;
   overflow-x: auto;
-  padding: 4px 22px 18px;
-  margin: 0 -22px;
+  padding: 12px 18px 6px;
+  margin: 0 -18px;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
 }
@@ -70,6 +115,9 @@ body {
   flex: 0 0 auto;
   background: #1c1c1e;
   color: #ddd;
+  border: none;
+  font: inherit;
+  cursor: pointer;
   text-decoration: none;
   font-size: 0.85rem;
   font-weight: 600;
@@ -78,9 +126,49 @@ body {
   white-space: nowrap;
   transition: background 0.2s, color 0.2s;
 }
-.chip:active, .chip:hover {
+.chip:active, .chip:hover, .chip.on {
   background: var(--orange);
   color: #1a1000;
+}
+
+/* curseur d'intensité, le geste de l'app */
+.intensity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 4px 4px;
+}
+.intensity input[type='range'] {
+  flex: 1;
+  appearance: none;
+  -webkit-appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--orange), var(--accent, var(--orange)));
+  outline: none;
+}
+.intensity input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #fff;
+  border: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
+}
+.intensity input[type='range']::-moz-range-thumb {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #fff;
+  border: none;
+}
+.intensity span {
+  font-weight: 800;
+  font-size: 1rem;
+  min-width: 3.2em;
+  text-align: right;
 }
 
 /* ---- cartes ---- */
@@ -197,6 +285,12 @@ body {
 }
 
 .card-body { padding: 16px 18px 20px; }
+.card-signature {
+  color: var(--accent, var(--orange));
+  font-weight: 700;
+  font-size: 1rem;
+  margin-bottom: 10px;
+}
 .card-meta {
   display: flex;
   flex-wrap: wrap;
