@@ -1,0 +1,13 @@
+{
+  "name": "optyx",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Optyx — racine Node pour le déploiement Heroku du site vitrine (site/)",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "heroku-postbuild": "cd site && npm ci --include=dev --no-audit --no-fund && npm run build",
+    "start": "node site/server.mjs"
+  }
+}
