@@ -16,6 +16,19 @@ export const lenses = [
     scene: 'swirl',
     accent: '#b8d977',
     three: { palette: ['#d7f0a4', '#f0e0a0', '#a8c877'], sprite: 'disc', swirl: 1.0, size: 0.5, glow: 0.3, haze: 0.05 },
+    specs: [
+      ['Formule optique', "6 éléments en 4 groupes (double Gauss)"],
+      ['Diaphragme', "8 lamelles"],
+      ['Mise au point mini', "0,5 m"],
+      ['Poids', "≈ 230 g"],
+      ['Fabrication', "KMZ, MMZ, Valdaï — plusieurs millions d'exemplaires"],
+      ['Cote actuelle', "≈ 30–80 € en occasion"],
+    ],
+    facts: [
+      "Né des réparations de guerre : les plans et l'outillage du Zeiss Biotar ont été transférés d'Allemagne vers l'URSS après 1945.",
+      "Le tourbillon vient d'un défaut assumé — la courbure de champ et l'astigmatisme étirent le bokeh en arcs autour du sujet.",
+      "Monté d'origine sur les reflex Zenit, il reste l'objectif vintage le plus vendu au monde — la porte d'entrée idéale.",
+    ],
     traits: [
       ['Tourbillon', 1.0],
       ['Vignettage', 0.45],
@@ -38,6 +51,18 @@ export const lenses = [
     scene: 'swirl-soft',
     accent: '#a8c4b8',
     three: { palette: ['#d4e8d8', '#e8e4cc', '#b8ccc0'], sprite: 'disc', swirl: 0.6, size: 0.55, breathe: true, haze: 0.1 },
+    specs: [
+      ['Formule optique', "6 éléments en 4 groupes (double Gauss)"],
+      ['Conception', "Willy Merté, Carl Zeiss Iéna, 1936"],
+      ['Diaphragme', "jusqu'à 17 lamelles selon les versions"],
+      ['Montures', "Exakta, M42"],
+      ['Cote actuelle', "≈ 150–400 € en occasion"],
+    ],
+    facts: [
+      "L'original dont l'Helios est la copie : même formule, verre et assemblage allemands d'avant-guerre.",
+      "Son grand frère, le Biotar 75 mm f/1.5, est considéré comme le roi absolu du bokeh tourbillonnant — et coté en conséquence.",
+      "Les premières versions à 17 lamelles donnent des ronds de bokeh parfaitement circulaires à toutes les ouvertures.",
+    ],
     traits: [
       ['Tourbillon', 0.85],
       ['Vignettage', 0.38],
@@ -59,6 +84,18 @@ export const lenses = [
     scene: 'bubbles',
     accent: '#e8c98a',
     three: { palette: ['#f4e2b8', '#f0c070', '#ffe8c8'], sprite: 'ring', rise: true, size: 0.95, haze: 0.05 },
+    specs: [
+      ['Formule optique', "3 éléments en 3 groupes (triplet de Cooke)"],
+      ['Diaphragme', "jusqu'à 15 lamelles"],
+      ['Mise au point mini', "≈ 1,1 m"],
+      ['Montures', "M42, Exakta"],
+      ['Cote actuelle', "≈ 250–600 € en occasion"],
+    ],
+    facts: [
+      "Trois lentilles seulement : c'est l'aberration sphérique non corrigée de cette formule minimaliste qui dessine les anneaux.",
+      "Tombé dans l'oubli, il est devenu culte vers 2010 quand les photographes macro ont redécouvert ses « bulles de savon ».",
+      "La marque Meyer Optik Görlitz a été ressuscitée en 2015 par financement participatif pour le refabriquer à l'identique.",
+    ],
     traits: [
       ['Bulles de savon', 1.0],
       ['Aberration chromatique', 0.45],
@@ -80,6 +117,18 @@ export const lenses = [
     scene: 'crisp',
     accent: '#e8e4dc',
     three: { palette: ['#f0ede4', '#ffe0aa', '#c2d4ec'], sprite: 'disc', size: 0.2, twinkle: true, haze: 0 },
+    specs: [
+      ['Formule optique', "7 éléments en 6 groupes"],
+      ['Verre', "verres au lanthane haute réfraction"],
+      ['Diaphragme', "10 lamelles"],
+      ['Montures', "vissante Leica (LTM) puis M"],
+      ['Cote actuelle', "≈ 400–1 500 € selon version"],
+    ],
+    facts: [
+      "À sa sortie en 1953, c'était l'objectif standard le plus piqué jamais mesuré — la référence des laboratoires pendant des années.",
+      "Le nom vient de « summit » (sommet) : la gamme Leica classe ses ouvertures par noms — Summicron pour f/2.",
+      "C'est l'objectif de prédilection de générations de photoreporters, d'Henri Cartier-Bresson aux agences modernes.",
+    ],
     traits: [
       ['Micro-contraste', 0.7],
       ['Vignettage', 0.2],
@@ -100,6 +149,18 @@ export const lenses = [
     scene: 'night',
     accent: '#ffd894',
     three: { palette: ['#ffdc96', '#ffc06e', '#b4c8ff'], sprite: 'disc', swirl: 0.15, size: 0.8, breathe: true, haze: 0.12 },
+    specs: [
+      ['Formule optique', "7 éléments en 6 groupes, sans asphérique"],
+      ['Conception', "Walter Mandler, Leitz Canada, 1976"],
+      ['Diaphragme', "16 lamelles"],
+      ['Poids', "≈ 630 g — un monstre pour un 50 mm"],
+      ['Cote actuelle', "≈ 4 000–8 000 € en occasion"],
+    ],
+    facts: [
+      "Premier f/1 de série au monde en photo 24×36 — conçu au Canada, pas à Wetzlar, par le légendaire Walter Mandler.",
+      "À pleine ouverture, la profondeur de champ à 1 m est d'environ 2 cm : la mise au point est un art à part entière.",
+      "Son glow à f/1 n'est pas un défaut corrigé depuis : les versions modernes l'ont éliminé, et les puristes le regrettent.",
+    ],
     traits: [
       ['Halo / glow', 0.95],
       ['Vignettage', 0.65],
@@ -121,6 +182,18 @@ export const lenses = [
     scene: 'dream',
     accent: '#f2ddd2',
     three: { palette: ['#ffeed6', '#ffd8e4', '#dee4ff'], sprite: 'disc', swirl: 0.2, size: 1.15, breathe: true, haze: 0.3 },
+    specs: [
+      ['Formule optique', "7 éléments en 5 groupes"],
+      ['Monture', "baïonnette du télémétrique Canon 7"],
+      ['Poids', "≈ 605 g"],
+      ['Production', "≈ 20 000 exemplaires (1961–1970)"],
+      ['Cote actuelle', "≈ 2 000–4 000 € en occasion"],
+    ],
+    facts: [
+      "« L'objectif le plus lumineux du monde » à sa sortie en 1961 — un demi-diaphragme devant l'œil humain, disait la publicité Canon.",
+      "Son surnom de « Dream Lens » vient des photographes : à f/0.95, netteté fragile, halos et contraste évanescent font des images de rêve.",
+      "Une version TV (monture C) équipait les caméras de surveillance et de télévision — souvent convertie aujourd'hui pour Leica M.",
+    ],
     traits: [
       ['Halo / glow', 1.0],
       ['Douceur des bords', 0.8],
@@ -142,6 +215,18 @@ export const lenses = [
     scene: 'gold',
     accent: '#ffc55e',
     three: { palette: ['#ffcb6e', '#ffab46', '#ffe4a0'], sprite: 'disc', swirl: 0.05, size: 0.6, sun: true, haze: 0.15 },
+    specs: [
+      ['Formule optique', "7 éléments en 6 groupes (version courante)"],
+      ['Particularité', "verre au thorium légèrement radioactif"],
+      ['Mise au point mini', "0,45 m"],
+      ['Poids', "≈ 245 g"],
+      ['Cote actuelle', "≈ 50–150 € en occasion"],
+    ],
+    facts: [
+      "Le thorium du verre jaunit avec les décennies — c'est cette patine dorée, unique à chaque exemplaire, qui fait sa signature.",
+      "Le jaunissement se corrige en exposant la lentille aux UV quelques jours… mais beaucoup préfèrent garder l'or.",
+      "La rarissime première version à 8 éléments (1964) est l'un des 50 mm les plus recherchés des collectionneurs.",
+    ],
     traits: [
       ['Dérive chaude', 1.0],
       ['Halo / glow', 0.35],
@@ -163,6 +248,18 @@ export const lenses = [
     scene: 'stars',
     accent: '#aec6ff',
     three: { palette: ['#f4f4fa', '#ffe4aa', '#aec6ff'], sprite: 'cross', size: 0.3, twinkle: true, haze: 0 },
+    specs: [
+      ['Formule optique', "7 éléments en 6 groupes, lentille frontale asphérique"],
+      ['Fabrication', "asphérique polie À LA MAIN par des maîtres opticiens"],
+      ['Diaphragme', "9 lamelles"],
+      ['Production', "≈ 11 000 exemplaires (1977–1997)"],
+      ['Cote actuelle', "≈ 3 000–5 000 € en occasion"],
+    ],
+    facts: [
+      "« Noct » pour nocturne : conçu pour photographier les points lumineux de nuit sans les ailes de coma qui les déforment.",
+      "Sa lentille asphérique était polie à la main — quelques exemplaires par jour, par une poignée d'artisans chez Nikon.",
+      "Longtemps sous-coté, il est devenu l'un des Nikkor manuels les plus chers depuis que les vidéastes l'ont redécouvert.",
+    ],
     traits: [
       ['Micro-contraste', 0.85],
       ['Halo / glow', 0.55],
@@ -183,6 +280,18 @@ export const lenses = [
     scene: 'cine',
     accent: '#f0a868',
     three: { palette: ['#ffbe78', '#ffe0b4'], duo: ['#78bebe', '#8ad4d4'], sprite: 'disc', pan: true, size: 0.65, bars: true, grain: true, haze: 0.1 },
+    specs: [
+      ['Gamme', "zooms ciné 35 mm et 16 mm (dont le 25–250 mm)"],
+      ['Inventions', "rétrofocus (1950), zooms 10× (années 1960)"],
+      ['Montures', "PL, PV, montures ciné historiques"],
+      ['Distinctions', "plusieurs Oscars techniques (Sci-Tech Awards)"],
+      ['Cote actuelle', "très variable — les zooms ciné vintage se louent plus qu'ils ne s'achètent"],
+    ],
+    facts: [
+      "Pierre Angénieux a inventé la formule rétrofocus en 1950 — celle qui équipe encore tous les grands-angles de reflex.",
+      "Ses optiques sont allées sur la Lune : les caméras des missions Apollo embarquaient des objectifs Angénieux.",
+      "De Godard à Hollywood : le rendu chaud et doux de ses zooms est devenu LE look du cinéma des années 1960–70.",
+    ],
     traits: [
       ['Virage ciné', 0.85],
       ['Grain', 0.6],
