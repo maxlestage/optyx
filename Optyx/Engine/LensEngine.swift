@@ -315,12 +315,17 @@ final class LensEngine {
                 }
             }
             guard var arcs = accumulated else { return result }
-            arcs = arcs.clampedToExtent().applyingGaussianBlur(sigma: 2.5)
+            // Même plancher de fusion que le filé : le flou doit combler
+            // l'écart réel entre copies (arc / nombre de copies), sinon
+            // chaque point devient un CHAPELET de répliques discrètes —
+            // chenilles blanches en pointillés au lieu d'arcs continus.
+            let fuse = max(2.5, Double(dim) * maxAngle / Double(count) * 0.35)
+            arcs = arcs.clampedToExtent().applyingGaussianBlur(sigma: fuse)
                 .cropped(to: extent)
             // La moyenne dilue chaque point sur la longueur de l'arc :
-            // gain de compensation — l'incrustation écran plafonne en
-            // douceur, pas de brûlure possible.
-            arcs = dimmed(arcs, to: CGFloat(count) * 0.45)
+            // gain de compensation contenu — trop fort, il brûlait les
+            // arcs en blanc et lavait l'image entière.
+            arcs = dimmed(arcs, to: 3.0)
             if let mask {
                 arcs = multiplied(arcs, mask).cropped(to: extent)
             }
