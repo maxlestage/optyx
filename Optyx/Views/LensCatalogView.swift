@@ -28,12 +28,19 @@ struct LensCatalogView: View {
                 LensDetailView(lens: lens)
             }
             .safeAreaInset(edge: .bottom) {
-                // Numéro de build visible : indispensable pour corréler les
-                // retours TestFlight avec les correctifs embarqués.
-                Text(Self.versionLabel)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .padding(.bottom, 4)
+                VStack(spacing: 2) {
+                    Text("Conçu et développé par Maxime Nathan Lestage")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    // Numéro de build visible : indispensable pour corréler
+                    // les retours TestFlight avec les correctifs embarqués.
+                    Text(Self.versionLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+                .padding(.bottom, 4)
             }
         }
     }

@@ -10,5 +10,8 @@
 	     fusionnées dans ce fichier au build. -->
 	<key>LSSupportsGameMode</key>
 	<false/>
+	<!-- Crédits de l'app, lisibles dans les informations du bundle. -->
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Maxime Nathan Lestage</string>
 </dict>
 </plist>
