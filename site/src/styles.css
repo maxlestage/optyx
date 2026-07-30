@@ -99,6 +99,22 @@ body {
   pointer-events: none;
   background: radial-gradient(72% 66% at 50% 46%, transparent 55%, rgba(0, 0, 0, 0.6) 100%);
 }
+.hero3d-sun {
+  position: absolute;
+  right: 6%;
+  top: 8%;
+  width: 46%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(255, 214, 128, 0.55) 0%, rgba(255, 176, 74, 0.22) 45%, transparent 72%);
+  filter: blur(6px);
+  animation: sun-breathe 7s ease-in-out infinite;
+}
+@keyframes sun-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
 .hero3d-bar {
   position: absolute;
   left: 0;
