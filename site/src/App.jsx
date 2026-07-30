@@ -42,8 +42,15 @@ function LensCard({ lens, index }) {
   )
 }
 
+/// Lien profond : ?lens=trioplan ouvre le terrain de jeu sur cet objectif.
+function initialLens() {
+  const wanted = new URLSearchParams(window.location.search).get('lens')
+  const index = lenses.findIndex((lens) => lens.id === wanted)
+  return index >= 0 ? index : 0
+}
+
 export default function App() {
-  const [selected, setSelected] = useState(0)
+  const [selected, setSelected] = useState(initialLens)
   const [intensity, setIntensity] = useState(100)
   const lens = lenses[selected]
   const k = intensity / 100
