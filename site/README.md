@@ -21,21 +21,33 @@ npm run build      # sortie statique dans site/dist/
 `base: './'` : le dossier `dist/` se déploie tel quel sur n'importe quel
 hébergement statique (GitHub Pages, Netlify, Vercel, nginx…).
 
-## Déploiement Heroku (conteneur)
+## Déploiement Heroku
 
-Le `Dockerfile` à la racine du dépôt construit le site puis le sert via
-`server.mjs` (serveur statique sans dépendance, à l'écoute sur le
-`$PORT` fourni par Heroku). Le `heroku.yml` déclare ce Dockerfile comme
-processus `web`. Mise en place, une seule fois :
+Trois voies, les deux premières faisables entièrement depuis un
+téléphone :
+
+**1. Bouton « Deploy to Heroku » (conteneur, recommandé).** Ouvrir :
+
+> https://heroku.com/deploy?template=https://github.com/maxlestage/optyx
+
+`app.json` (stack `container`) + `heroku.yml` + `Dockerfile` font tout :
+Heroku construit l'image et démarre le site. Aucune CLI.
+
+**2. Tableau de bord (buildpack Node).** App existante connectée au
+dépôt GitHub → onglet Deploy → « Deploy Branch » (`master`). Le
+`package.json` racine (`heroku-postbuild` construit le site) et le
+`Procfile` (`web: node site/server.mjs`) sont détectés automatiquement.
+Activer « Automatic Deploys » pour redéployer à chaque merge.
+
+**3. CLI (conteneur), depuis un ordinateur :**
 
 ```bash
-heroku create optyx-site            # ou votre nom d'app
+heroku create optyx-site
 heroku stack:set container -a optyx-site
-git push heroku master              # build l'image et démarre le site
+git push heroku master
 ```
 
-Chaque `git push heroku master` reconstruit et redéploie. Test local de
-l'image :
+Test local de l'image :
 
 ```bash
 docker build -t optyx-site .

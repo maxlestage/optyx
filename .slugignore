@@ -1,0 +1,6 @@
+# Voie buildpack Node : le slug n'a besoin que du site — l'app iOS,
+# les visuels marketing et la CI n'ont rien à faire dans le dyno.
+Optyx/
+Optyx.xcodeproj/
+marketing/
+ci_scripts/

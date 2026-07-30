@@ -1,0 +1,6 @@
+# Contexte Docker : seul site/ sert à l'image — tout le reste
+# (app iOS, marketing, CI) est exclu pour un build rapide.
+*
+!site/
+site/node_modules/
+site/dist/

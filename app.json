@@ -1,0 +1,13 @@
+{
+  "name": "Optyx — site vitrine",
+  "description": "Site vitrine des 9 objectifs vintage simulés par l'app Optyx : React + Vite, servi en conteneur Docker.",
+  "repository": "https://github.com/maxlestage/optyx",
+  "keywords": ["optyx", "react", "vite", "vintage", "photographie"],
+  "stack": "container",
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  }
+}
