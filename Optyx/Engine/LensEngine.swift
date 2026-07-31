@@ -451,38 +451,66 @@ final class LensEngine {
         // résolution, et le seuil suit l'image au lieu d'être arbitraire.
         guard strength * dim > 1.0 else { return img }
 
-        // Flou gaussien + mélange masqué plutôt que CIMaskedVariableBlur :
-        // ce dernier est le filtre le plus lent de Core Image (rayon
-        // variable échantillonné par pixel), alors qu'avec un masque déjà
-        // adouci le fondu net → flou est visuellement identique, pour une
-        // fraction du coût.
-        // Plafond absolu à 40 px : proportionnel à `dim`, le sigma
+        // Plafond absolu à 40 px : proportionnel à `dim`, le rayon
         // atteindrait 74 px en 4K, où le flou coûte cher sans rien ajouter
-        // — au-delà de 40 px le fond est déjà une pâte uniforme.
+        // — au-delà, le fond est déjà une pâte uniforme.
         let sigma = min(dim * strength, 40)
-        let blurred = img.clampedToExtent()
-            .applyingGaussianBlur(sigma: sigma)
-            .cropped(to: extent)
+        let blurred = defocusedCopy(of: img, lens: lens, radius: sigma, extent: extent)
         let blend = CIFilter.blendWithMask()
         blend.inputImage = blurred
         blend.backgroundImage = img
         blend.maskImage = mask
         guard var out = blend.outputImage else { return img }
 
-        // Seconde passe sur le fond LOINTAIN seulement. En cascade sur la
-        // sortie précédente : σ_total = √(σ² + (0,9σ)²) ≈ 1,35 σ, obtenu
-        // pour le coût d'un flou de 0,9 σ.
+        // Seconde passe sur le fond LOINTAIN seulement : le fond éloigné
+        // fond davantage que le fond proche, et c'est ce GRADIENT que
+        // l'œil lit comme du relief.
         guard graded else { return out.cropped(to: extent) }
         let far = ramp(mask, from: 0.60, to: 1.0)
-        let deeper = out.clampedToExtent()
-            .applyingGaussianBlur(sigma: sigma * 0.9)
-            .cropped(to: extent)
+        let deeper = defocusedCopy(of: out, lens: lens, radius: sigma * 0.9, extent: extent)
         let deepBlend = CIFilter.blendWithMask()
         deepBlend.inputImage = deeper
         deepBlend.backgroundImage = out
         deepBlend.maskImage = far
         out = deepBlend.outputImage ?? out
         return out.cropped(to: extent)
+    }
+
+    /// Copie DÉFOCALISÉE — le passage du filtre au verre.
+    ///
+    /// Un flou gaussien étale un point de lumière en tache terne : il
+    /// répartit son énergie sur une cloche, et le sommet s'effondre. Un
+    /// objectif, lui, projette ce point en un DISQUE net et brillant, dont
+    /// le bord concentre la lumière — c'est ce disque, et lui seul, qu'on
+    /// appelle bokeh.
+    ///
+    /// `CIBokehBlur` fait exactement cela : disques d'énergie conservée,
+    /// avec un anneau de bord réglable. Il rend donc gratuitement, et pour
+    /// TOUTE l'image, ce que la chaîne fabriquait péniblement par
+    /// morphologie sur les seules hautes lumières détectées — d'où le
+    /// caractère « bulles de savon » du Trioplan, obtenu ici en réglant
+    /// l'anneau plutôt qu'en dessinant des contours.
+    ///
+    /// Repli explicite sur le flou gaussien si le filtre est indisponible :
+    /// l'API rend un optionnel, la chaîne ne doit jamais s'interrompre.
+    private func defocusedCopy(of img: CIImage, lens: LensProfile,
+                               radius: CGFloat, extent: CGRect) -> CIImage {
+        let clamped = img.clampedToExtent()
+        let bokeh = CIFilter.bokehBlur()
+        bokeh.inputImage = clamped
+        // Le rayon d'un disque vaut environ le double du sigma d'une
+        // gaussienne d'étalement comparable ; borné à la plage du filtre.
+        bokeh.radius = Float(min(500, max(1, radius * 2)))
+        // L'anneau de bord EST la signature du verre : marqué sur le
+        // triplet Trioplan dont l'aberration sphérique n'est pas corrigée,
+        // absent des formules modernes bien corrigées.
+        bokeh.ringAmount = Float(min(1, lens.bubble))
+        bokeh.ringSize = Float(0.10 + 0.10 * min(1, lens.bubble))
+        bokeh.softness = 1.0
+        if let out = bokeh.outputImage {
+            return out.cropped(to: extent)
+        }
+        return clamped.applyingGaussianBlur(sigma: radius).cropped(to: extent)
     }
 
     /// Perte de piqué vers les bords du CHAMP — une aberration radiale,
@@ -566,8 +594,12 @@ final class LensEngine {
                 // assombrirait toute la zone.
                 discs = hollow ? rim : maxed(discs.cropped(to: extent), scaled(rim, by: 0.6))
             }
+            // Gain réduit depuis que la défocalisation produit elle-même
+            // de vrais disques : cette couche ne fait plus que renforcer
+            // les points les plus vifs. À pleine puissance, les deux
+            // rayons légèrement différents dessineraient un double anneau.
             return scaled(discs.cropped(to: extent),
-                          by: CGFloat(min(1.0, 1.5 * strength)))
+                          by: CGFloat(min(1.0, 0.8 * strength)))
         }
 
         guard let customMask else {
