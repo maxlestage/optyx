@@ -81,7 +81,6 @@ final class LensEngine {
         var img = input
 
         img = applyTone(img, lens: lens, k: k)
-        img = applyPunch(img, lens: lens, k: k)
         img = applyWarmth(img, lens: lens, k: k)
         img = applyCineTone(img, lens: lens, k: k)
         img = applySwirl(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
@@ -103,6 +102,10 @@ final class LensEngine {
                         customMask: effectMask)
         img = applyChromaticAberration(img, lens: lens, k: k, extent: extent, center: center,
                                        customMask: effectMask, bands: bands)
+        // Le micro-contraste vient APRÈS les flous : appliqué avant, la
+        // défocalisation effaçait exactement ce qu'il venait d'accentuer.
+        // Et avant le grain, sinon la netteté amplifierait le bruit.
+        img = applyPunch(img, lens: lens, k: k)
         img = applyVignette(img, lens: lens, k: k, center: center, dim: dim,
                             extent: extent, customMask: depthMask)
         img = applyGrain(img, lens: lens, k: k, extent: extent)
@@ -145,7 +148,13 @@ final class LensEngine {
         // préservées, le caractère vient des effets optiques.
         let controls = CIFilter.colorControls()
         controls.inputImage = out
-        controls.contrast = Float(1.0 - 0.04 * lens.fade * k)
+        // Le voile devient un vrai voile : à 0,04 la perte de contraste
+        // était de 1 % au plus, invisible. À 0,10 elle atteint 3 % sur
+        // l'Angénieux — perceptible, sans virer au gris. Le coefficient
+        // reste modeste à dessein : CIColorControls travaille en espace
+        // LINÉAIRE, où l'effet perçu sur les noirs est bien supérieur à
+        // ce que la valeur laisse croire.
+        controls.contrast = Float(1.0 - 0.10 * lens.fade * k)
         controls.saturation = Float(1.0 + (lens.saturation - 1.0) * k)
         controls.brightness = 0
         out = controls.outputImage ?? out
@@ -212,7 +221,11 @@ final class LensEngine {
 
     /// Dérive chaude (verre au thorium, traitements anciens).
     private func applyWarmth(_ img: CIImage, lens: LensProfile, k: Double) -> CIImage {
-        guard lens.warmth > 0.01 else { return img }
+        // Axe COMPLET : une valeur négative refroidit. Un verre soviétique
+        // tire vers le vert-bleu, un verre allemand vers l'ambre — les
+        // opposer se lit instantanément sur un mur uni, là où aucun bokeh
+        // n'existe. Un profil à zéro saute le filtre entièrement.
+        guard abs(lens.warmth) > 0.01 else { return img }
         // Dérive dorée AFFIRMÉE : la chaleur du thorium est la signature du
         // Takumar — elle doit se voir au premier coup d'œil, sans virer au
         // filtre orange uniforme.
@@ -233,37 +246,47 @@ final class LensEngine {
                             customMask: CIImage? = nil,
                             bands: [(factor: Double, weight: CIImage)]? = nil) -> CIImage {
         let strength = lens.swirl * k
-        // Sous 15 %, l'angle est si petit que la moyenne de 2 copies fait
-        // une DOUBLE EXPOSITION (contours dédoublés sur les membres, les
-        // montants) au lieu d'un flou tangentiel : l'effet nuit plus
-        // qu'il n'apporte, autant ne rien faire (Takumar, Noct-Nikkor,
-        // Angénieux — leur signature est ailleurs).
-        guard strength > 0.15 else { return img }
+        // Le seuil porte sur le PROFIL, pas sur le produit profil × molette :
+        // sinon la molette d'intensité devenait un interrupteur qui coupait
+        // l'effet en cours de course. Les verres sans tourbillon (Takumar,
+        // Noct-Nikkor, Angénieux) sont écartés une fois pour toutes ; les
+        // autres suivent la molette de façon continue.
+        guard lens.swirl >= 0.20, strength > 0.05 else { return img }
 
         let clamped = img.clampedToExtent()
 
         /// Copie tourbillonnée pour une amplitude donnée (1 = nominale).
         func swirledLayer(amplitude: Double) -> CIImage? {
-            // TORSION GÉOMÉTRIQUE d'abord : la scène tourne réellement
-            // autour du centre — visible même sur les aplats sans hautes
-            // lumières (mur, ciel), là où le filé de rotation seul n'était
-            // qu'un flou de plus. Le centre du cadre est protégé par les
-            // masques de mélange, seule la couronne se tord.
+            // TORSION GÉOMÉTRIQUE à profil CROISSANT : le centre reste
+            // immobile, la couronne tourne — c'est le sens d'un vrai
+            // tourbillon, et c'est ce qui fait COURBER les lignes droites
+            // d'un mur, seule signature lisible sur un aplat sans la
+            // moindre haute lumière.
+            //
+            // CITwirlDistortion fait l'inverse (rotation maximale AU
+            // CENTRE, nulle au rayon) : on la compose donc avec une
+            // rotation globale opposée. Les deux rotations partagent le
+            // même centre, elles s'additionnent donc exactement — un point
+            // à distance r tourne de T·f(r) − T, soit zéro au centre et −T
+            // aux coins. Aucun noyau maison à compiler.
+            let twist = CGFloat(0.16 * strength * min(amplitude, 1.4))
+            let halfDiagonal = hypot(extent.width, extent.height) / 2
             let twirl = CIFilter.twirlDistortion()
             twirl.inputImage = clamped
             twirl.center = center
-            twirl.radius = Float(dim * 1.3)
-            twirl.angle = Float(1.15 * strength * min(amplitude, 1.2))
-            let base = twirl.outputImage?.clampedToExtent() ?? clamped
+            twirl.radius = Float(halfDiagonal)
+            twirl.angle = Float(twist)
+            let twisted = twirl.outputImage?.clampedToExtent() ?? clamped
+            let unrotate = CGAffineTransform(translationX: center.x, y: center.y)
+                .rotated(by: -twist)
+                .translatedBy(x: -center.x, y: -center.y)
+            let base = twisted.transformed(by: unrotate).clampedToExtent()
 
-            // 0.38 rad (~22°) : la rotation moyenne est géométriquement
-            // nulle au centre du cadre (sujet, horizon) — les hautes
-            // lumières de l'arrière-plan doivent s'étirer en ARCS francs,
-            // la signature Helios se voit au premier regard. L'amplitude
-            // des bandes lointaines est bornée : à ×1,5 l'angle total
-            // dépassait 60° et aucun nombre raisonnable de copies ne
-            // fusionne plus.
-            let maxAngle = 0.38 * strength * min(amplitude, 1.2)
+            // Filé de rotation par-dessus la torsion : c'est lui qui étire
+            // les hautes lumières en arcs. Amplitude réduite depuis que la
+            // torsion porte l'essentiel de l'effet géométrique — la somme
+            // des deux reste franche, sans exiger seize copies.
+            let maxAngle = 0.16 * strength * min(amplitude, 1.4)
             // Échantillonnage adaptatif sur l'angle EFFECTIF — amplitude
             // des bandes de profondeur comprise (jusqu'à ×1.5) : à grand
             // angle, trop peu de copies se dissocient en répliques
@@ -312,7 +335,7 @@ final class LensEngine {
             // concentriques sur les textures (sable, murs) et les
             // contours dédoublés aux amplitudes moyennes.
             let gapBlur = Double(dim) * maxAngle / Double(count) * 0.35
-            let sigma = max((1.2 + 3.4 * strength) * (0.4 + 0.7 * amplitude), gapBlur)
+            let sigma = max((1.2 + 3.4 * strength) * (0.4 + 0.7 * min(amplitude, 1.4)), gapBlur)
             return swirled.clampedToExtent()
                 .applyingGaussianBlur(sigma: sigma)
                 .cropped(to: extent)
@@ -591,7 +614,10 @@ final class LensEngine {
                            dim: CGFloat, extent: CGRect,
                            customMask: CIImage? = nil) -> CIImage {
         let strength = lens.glow * k
-        guard strength > 0.02 else { return img }
+        // La sortie anticipée doit tenir compte des DEUX effets rendus
+        // ici : un profil qui n'aurait que du voile et pas de halation
+        // sortirait sinon sans rien faire.
+        guard strength > 0.02 || lens.veil * k > 0.02 else { return img }
         // Le halo naît des HAUTES LUMIÈRES seulement. Donner l'image
         // entière à CIBloom (et la remplacer par sa version bloomée)
         // noyait toute la photo sous un voile laiteux dès que le glow
@@ -628,18 +654,20 @@ final class LensEngine {
 
         // VOILE ONIRIQUE (Orton) : copie floue incrustée en écran sur
         // tout le cadre — la promesse du Dream Lens se voit sur n'importe
-        // quelle scène, même sans haute lumière. Réservé aux VRAIS
-        // rêveurs (glow > 0,6 : Noctilux, Dream Lens) pour que Trioplan
-        // et Noct-Nikkor gardent leur identité nette. L'incrustation
-        // écran ÉCLAIRCIT toujours, elle ne peut pas griser : rien à voir
-        // avec l'ancien voile laiteux qui remplaçait l'image par sa
-        // version bloomée.
+        // quelle scène, même sans haute lumière. Il a désormais son PROPRE
+        // paramètre au lieu d'un seuil sur `glow` : la halation autour des
+        // hautes lumières et le voile général sont deux phénomènes
+        // distincts, qui méritent deux réglages. L'incrustation écran
+        // ÉCLAIRCIT toujours, elle ne peut pas griser : rien à voir avec
+        // l'ancien voile laiteux qui remplaçait l'image par sa version
+        // bloomée.
         var out = img
-        if strength > 0.6 {
+        let veilStrength = lens.veil * k
+        if veilStrength > 0.02 {
             let dreamy = img.clampedToExtent()
-                .applyingGaussianBlur(sigma: dim * 0.012 * strength)
+                .applyingGaussianBlur(sigma: dim * 0.020 * veilStrength)
                 .cropped(to: extent)
-            let veil = dimmed(dreamy, to: 0.33 * CGFloat(strength))
+            let veil = dimmed(dreamy, to: 0.42 * CGFloat(veilStrength))
             let orton = CIFilter.screenBlendMode()
             orton.inputImage = veil
             orton.backgroundImage = out
@@ -679,7 +707,11 @@ final class LensEngine {
                                           customMask: CIImage? = nil,
                                           bands: [(factor: Double, weight: CIImage)]? = nil) -> CIImage {
         let strength = lens.chroma * k
-        guard strength > 0.02 else { return img }
+        // Garde sur le PROFIL : les verres dont le décalage resterait sous
+        // le pixel (Summicron, Noct-Nikkor) sont écartés une fois pour
+        // toutes. Le second seuil, lui, ne dépend que de la molette — sans
+        // cette séparation, l'intensité se comportait en interrupteur.
+        guard lens.chroma >= 0.13, strength > 0.02 else { return img }
         // Franges renforcées : sous 0.010 le décalage restait sous le seuil
         // de visibilité sur un écran de téléphone.
         let baseDelta = 0.014 * strength
@@ -845,13 +877,16 @@ final class LensEngine {
     /// netteté → effet léger, lointain → effet fort. Les rampes se
     /// recouvrent pour des fondus doux entre bandes.
     private func depthBands(_ mask: CIImage) -> [(factor: Double, weight: CIImage)] {
-        let rampNear = ramp(mask, from: 0.25, to: 0.45)
-        let rampMid = ramp(mask, from: 0.55, to: 0.70)
-        let rampFar = ramp(mask, from: 0.80, to: 0.92)
+        // DEUX bandes et non trois : la différence entre la bande médiane
+        // et ses voisines n'était pas perceptible, alors qu'elle coûtait
+        // une chaîne complète d'effets par trame. Les deux bandes qui
+        // restent portent un écart franc — c'est ce qui finance le
+        // nouveau flou d'arrière-plan sans dépasser le budget GPU.
+        let rampNear = ramp(mask, from: 0.25, to: 0.55)
+        let rampFar = ramp(mask, from: 0.60, to: 0.92)
         return [
-            (0.6, multiplied(rampNear, inverted(rampMid))),
-            (1.0, multiplied(rampMid, inverted(rampFar))),
-            (1.5, rampFar),
+            (0.7, multiplied(rampNear, inverted(rampFar))),
+            (1.3, rampFar),
         ]
     }
 
@@ -910,11 +945,12 @@ final class LensEngine {
 
         let threshold = CIFilter.colorThreshold()
         threshold.inputImage = gray
-        // Seuil EXIGEANT : seuls les vrais éclats (lampes, guirlandes,
-        // reflets spéculaires) comptent. Un seuil bas transformait les
-        // détails clairs des photos de jour en fausses sources — anneaux
-        // dessinés sur les nuages, chapelets sur les surfaces striées.
-        threshold.threshold = 0.70
+        // Seuil exigeant, mais plus praticable qu'à 0,70 : à ce niveau,
+        // une lampe d'intérieur ordinaire n'était même pas reconnue. La
+        // protection contre les fausses sources (anneaux sur les nuages,
+        // chapelets sur les surfaces claires) ne vient PAS de ce seuil
+        // mais de l'exigence d'entourage sombre, plus bas — inchangée.
+        threshold.threshold = 0.58
         guard let thresholded = threshold.outputImage else { return nil }
 
         // Ouverture (érosion puis dilatation légèrement plus large) :
@@ -922,7 +958,10 @@ final class LensEngine {
         // masque initial, il ne reste que les points. La dilatation
         // élargie couvre entièrement le bord des grandes plages, sinon un
         // filet d'un pixel y survivrait.
-        let openRadius = Float(max(4, dim * 0.014))
+        // Rayon plafonné à 83 px : proportionnel, il atteindrait 86 px en
+        // 4K, au-delà de la plage où la morphologie de Core Image reste
+        // raisonnable — et son coût croît avec le rayon.
+        let openRadius = Float(min(83, max(4, dim * 0.020)))
         let erode = CIFilter.morphologyMinimum()
         erode.inputImage = thresholded.clampedToExtent()
         erode.radius = openRadius
