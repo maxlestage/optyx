@@ -255,15 +255,35 @@ final class LensEngine {
         // tire vers le vert-bleu, un verre allemand vers l'ambre — les
         // opposer se lit instantanément sur un mur uni, là où aucun bokeh
         // n'existe. Un profil à zéro saute le filtre entièrement.
-        guard abs(lens.warmth) > 0.01 else { return img }
-        // Dérive dorée AFFIRMÉE : la chaleur du thorium est la signature du
-        // Takumar — elle doit se voir au premier coup d'œil, sans virer au
-        // filtre orange uniforme.
-        let filter = CIFilter.temperatureAndTint()
-        filter.inputImage = img
-        filter.neutral = CIVector(x: 6500, y: 0)
-        filter.targetNeutral = CIVector(x: 6500 + 2200 * lens.warmth * k, y: 3.5 * lens.warmth * k)
-        return filter.outputImage ?? img
+        let warmth = lens.warmth * k
+        guard abs(warmth) > 0.01 else { return img }
+
+        // AXE INVERSÉ, corrigé ici. La version précédente pilotait
+        // `CITemperatureAndTint` avec `targetNeutral = 6500 + 2200·warmth`.
+        // Or ce filtre adapte le blanc de référence VERS la cible : porter
+        // la cible à 8700 K rend les blancs bleutés, pas dorés. Le verre au
+        // thorium du Takumar (warmth = +1) sortait donc FROID, et l'Helios
+        // soviétique (−0,3) chaud — les neuf objectifs viraient à l'envers,
+        // et le Takumar perdait sa seule signature, l'or.
+        //
+        // Remplacé par une matrice de canaux : plus aucune convention à
+        // deviner, le signe est lisible dans le code. Rouge et bleu bougent
+        // en sens contraires (la luminance reste donc à peu près
+        // constante), le vert porte une pointe de teinte — magenta au
+        // chaud, vert au froid, comme les traitements anciens.
+        //
+        // L'alpha est laissé strictement intact : la caméra livre une image
+        // opaque, où une matrice RVB est exactement un gain par canal.
+        let gain = CGFloat(0.20 * warmth)
+        let tint = CGFloat(0.05 * warmth)
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = img
+        matrix.rVector = CIVector(x: 1 + gain, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: 1 - tint, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: 1 - gain, w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        matrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        return matrix.outputImage ?? img
     }
 
     /// Bokeh tourbillonnant : moyenne de copies légèrement pivotées autour
