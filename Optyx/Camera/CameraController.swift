@@ -473,7 +473,8 @@ final class CameraController: NSObject, ObservableObject {
 
     // MARK: - Traitement d'une image du flux
 
-    private func processVideoFrame(_ sampleBuffer: CMSampleBuffer, depthMask: CIImage?) {
+    private func processVideoFrame(_ sampleBuffer: CMSampleBuffer, depthMask: CIImage?,
+                                   defocusMap: CIImage? = nil) {
         guard !isProcessingFrame,
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         isProcessingFrame = true
@@ -493,13 +494,16 @@ final class CameraController: NSObject, ObservableObject {
         // vignettage et les masques radiaux épousent le cadre choisi.
         // Le masque de profondeur subit le même recadrage pour rester aligné.
         var depthMask = depthMask
+        var defocusMap = defocusMap
         if let ratio = photoFormatRatio {
             image = Self.centerCrop(image, longOverShort: ratio)
             depthMask = depthMask.map { Self.centerCrop($0, longOverShort: ratio) }
+            defocusMap = defocusMap.map { Self.centerCrop($0, longOverShort: ratio) }
         }
 
         var processed = LensEngine.shared.render(image, lens: lens, intensity: intensity,
-                                                 backgroundMask: depthMask)
+                                                 backgroundMask: depthMask,
+                                                 defocusMap: defocusMap)
 
         // Letterbox CinemaScope : recadrage centré à 2.39:1, gravé dans le
         // fichier ; le viseur montre naturellement les bandes noires.
@@ -744,14 +748,19 @@ final class CameraController: NSObject, ObservableObject {
     /// Même étalonnage absolu que le viseur, même filet : masque quasi
     /// vide (aucun arrière-plan mesurable) → nil, le rendu repasse au
     /// masque radial et la photo garde la signature de l'objectif.
-    private static func backgroundMask(from depthData: AVDepthData,
-                                       orientation: CGImagePropertyOrientation) -> CIImage? {
+    /// Rend AUSSI la carte du cercle de confusion : elle vient de la même
+    /// disparité, et la conversion + le nettoyage NaN ne doivent être
+    /// payés qu'une fois.
+    private static func depthField(from depthData: AVDepthData,
+                                   orientation: CGImagePropertyOrientation)
+        -> (mask: CIImage, defocus: CIImage?)? {
         let disparity = depthData.converting(
             toDepthDataType: kCVPixelFormatType_DisparityFloat32)
         DepthExtractor.scrubNonFinite(disparity.depthDataMap)
         let map = CIImage(cvPixelBuffer: disparity.depthDataMap)
             .oriented(unmirrored(orientation))
-        return DepthExtractor.absoluteFarMask(map)
+        guard let mask = DepthExtractor.absoluteFarMask(map) else { return nil }
+        return (mask, DepthExtractor.defocusMap(map))
     }
 
     /// Orientation débarrassée de son miroir. Le viseur selfie est affiché
@@ -771,7 +780,16 @@ final class CameraController: NSObject, ObservableObject {
 
     /// Version pour le flux direct : réutilise la plage min/max mise en
     /// cache et ne la rafraîchit que périodiquement. Appelée sur `videoQueue`.
-    private func liveBackgroundMask(from depthData: AVDepthData) -> CIImage? {
+    ///
+    /// Rend deux cartes issues de la MÊME disparité : le masque
+    /// d'arrière-plan qui gradue les aberrations, et le cercle de
+    /// confusion qui pilote la défocalisation. Elles ne se confondent pas
+    /// — l'un est une découpe (gamma appuyé, saturé dès 2,2 m), l'autre
+    /// une grandeur physique (strictement linéaire, croissante jusqu'à
+    /// l'infini). Les calculer ensemble évite de convertir et de nettoyer
+    /// la carte deux fois par trame.
+    private func liveDepthField(from depthData: AVDepthData)
+        -> (mask: CIImage, defocus: CIImage?)? {
         // Conversion en disparité float32 conservée à dessein : la carte
         // native peut être en MÈTRES (profondeur) selon le capteur, or
         // tous les seuils (acquisition, maintien, zone morte) sont
@@ -791,8 +809,9 @@ final class CameraController: NSObject, ObservableObject {
         // osciller. Seul filet : le délégué du synchroniseur mesure la
         // couverture du masque et le supprime (repli radial) quand la
         // scène n'a aucun arrière-plan mesurable.
-        return DepthExtractor.farMask(map, range: DepthExtractor.liveAbsoluteRange,
-                                      farIsSmall: true)
+        let mask = DepthExtractor.farMask(map, range: DepthExtractor.liveAbsoluteRange,
+                                          farIsSmall: true)
+        return (mask, DepthExtractor.defocusMap(map))
     }
 
     // MARK: - Déclencheur et retardateur
@@ -1192,11 +1211,14 @@ extension CameraController: AVCaptureDataOutputSynchronizerDelegate {
               !syncedVideo.sampleBufferWasDropped else { return }
 
         var depthMask: CIImage?
+        var defocusMap: CIImage?
         if depthEnabled,
            let syncedDepth = synchronizedDataCollection
                .synchronizedData(for: depthOutput) as? AVCaptureSynchronizedDepthData,
-           !syncedDepth.depthDataWasDropped {
-            depthMask = liveBackgroundMask(from: syncedDepth.depthData)
+           !syncedDepth.depthDataWasDropped,
+           let field = liveDepthField(from: syncedDepth.depthData) {
+            depthMask = field.mask
+            defocusMap = field.defocus
         }
 
         // Couverture du masque mesurée périodiquement hors du chemin des
@@ -1227,10 +1249,16 @@ extension CameraController: AVCaptureDataOutputSynchronizerDelegate {
             // le masque brut, même supprimé pour le rendu.
             if depthMaskSuppressed && !depthMaskPreview {
                 depthMask = nil
+                // La carte de flou tombe AVEC le masque : quand la scène
+                // n'a aucun arrière-plan mesurable, la profondeur n'est
+                // pas seulement peu utile, elle est fausse. La laisser
+                // pilotait la défocalisation sur du bruit.
+                defocusMap = nil
             }
         }
 
-        processVideoFrame(syncedVideo.sampleBuffer, depthMask: depthMask)
+        processVideoFrame(syncedVideo.sampleBuffer, depthMask: depthMask,
+                          defocusMap: defocusMap)
     }
 }
 
@@ -1313,14 +1341,17 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
             // faisait échouer l'enregistrement dans Photos — photo perdue.
             var vintageType: UTType?
             if let processedData, let source = UIImage(data: processedData) {
-                var mask = depthData.flatMap {
-                    Self.backgroundMask(from: $0, orientation: orientation)
+                let field = depthData.flatMap {
+                    Self.depthField(from: $0, orientation: orientation)
                 }
+                var mask = field?.mask
+                var defocusMap = field?.defocus
                 let normalized = source.normalized(maxDimension: 3200)
                 var ciImage = CIImage(image: normalized)
                 if let ratio = formatRatio {
                     ciImage = ciImage.map { Self.centerCrop($0, longOverShort: ratio) }
                     mask = mask.map { Self.centerCrop($0, longOverShort: ratio) }
+                    defocusMap = defocusMap.map { Self.centerCrop($0, longOverShort: ratio) }
                 }
                 // Si le rendu avec masque de profondeur échoue, on
                 // redéveloppe sans masque : la photo est toujours sauvée.
@@ -1328,7 +1359,8 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
                    let rendered = LensEngine.shared.renderUIImage(ciImage,
                                                                   lens: lens,
                                                                   intensity: intensity,
-                                                                  backgroundMask: mask)
+                                                                  backgroundMask: mask,
+                                                                  defocusMap: defocusMap)
                        ?? LensEngine.shared.renderUIImage(ciImage,
                                                           lens: lens,
                                                           intensity: intensity,

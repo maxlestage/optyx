@@ -56,6 +56,77 @@ enum DepthExtractor {
     /// les effets dans la quasi-totalité des scènes en intérieur.
     static let liveAbsoluteRange = DepthRange(min: 0.45, max: 1.15)
 
+    /// Disparité du PLAN DE NETTETÉ, en 1/mètres — la mise au point est
+    /// réputée faite à 1/1,15 ≈ 0,87 m. Même valeur que la borne haute de
+    /// `liveAbsoluteRange`, et pour la même raison : c'est la distance en
+    /// deçà de laquelle un sujet est considéré net. La garder unique
+    /// garantit que le masque des aberrations et la carte de flou parlent
+    /// de la même scène.
+    static let focusDisparity: Float = liveAbsoluteRange.max
+
+    /// CARTE DU CERCLE DE CONFUSION, normalisée 0…1 — le passage du
+    /// masque au VERRE.
+    ///
+    /// Le diamètre de la tache qu'un objectif projette d'un point situé à
+    /// la distance d, mise au point à s, vaut
+    ///
+    ///     c = f²·|d − s| / (N·d·(s − f))       (f, d, s en mm)
+    ///
+    /// La carte de profondeur ne donne pas d mais la DISPARITÉ x = 1/d
+    /// (en 1/m). En y substituant d = 1000/x et s = 1000/x_f :
+    ///
+    ///     c = f²·(x_f − x) / (N·(1000 − f·x_f))
+    ///
+    /// Le dénominateur ne dépend plus du pixel : **le cercle de confusion
+    /// est exactement affine en disparité**. Normalisé par sa valeur à
+    /// l'infini (x = 0), il se réduit à
+    ///
+    ///     c / c∞ = (x_f − x) / x_f = 1 − x/x_f
+    ///
+    /// soit une simple matrice de couleur. Toute l'optique tient dans
+    /// cette ligne — et l'amplitude, elle, est portée par la focale et
+    /// l'ouverture réelles du verre (`LensProfile.defocusRadiusFraction`).
+    ///
+    /// Deux différences décisives avec le masque d'arrière-plan :
+    /// 1. Il est LINÉAIRE, sans gamma. Le gamma 1.6 de `farMask` accentue
+    ///    la séparation sujet/fond — utile pour un masque de découpe,
+    ///    faux pour un flou : il courbe la seule grandeur que l'optique
+    ///    impose d'être droite.
+    /// 2. Il ne SATURE qu'à l'infini, là où `liveAbsoluteRange` plafonne
+    ///    dès 2,2 m. Un fond à 2,2 m et un fond à 20 m recevaient le même
+    ///    flou ; ils reçoivent maintenant 0,60 et 0,96 de l'amplitude.
+    ///
+    /// Côté PROCHE (x > x_f, sujet plus près que la mise au point), la
+    /// carte est volontairement laissée à zéro. Un vrai objectif y floute
+    /// aussi, et plus vite qu'à l'arrière — mais l'app ne sait pas où
+    /// l'utilisateur fait le point, et lire « le plus proche est net » est
+    /// le seul pari sans danger : l'autre rendrait un visage en gros plan
+    /// intégralement flou.
+    static func defocusMap(_ map: CIImage,
+                           focusDisparity xf: Float = Self.focusDisparity) -> CIImage? {
+        guard xf > 0.01, !map.extent.isEmpty, !map.extent.isInfinite else { return nil }
+
+        // 1 − x/x_f, en une matrice : pente négative, biais 1.
+        let slope = CGFloat(-1 / xf)
+        var out = map.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: slope, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: slope, y: 0, z: 0, w: 0),
+            "inputBVector": CIVector(x: slope, y: 0, z: 0, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputBiasVector": CIVector(x: 1, y: 1, z: 1, w: 1),
+        ])
+
+        // Borne INDISPENSABLE : un sujet à 30 cm donne x = 3,3 et donc
+        // −1,9 avant clamp. Les valeurs négatives se propagent dans les
+        // flous et les mélanges du masque en pixels corrompus.
+        out = out.applyingFilter("CIColorClamp", parameters: [
+            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1),
+        ])
+
+        return softened(out)
+    }
+
     /// Masque d'arrière-plan en étalonnage absolu (photos capturées), ou
     /// nil si la scène n'a aucun arrière-plan mesurable : un masque quasi
     /// vide appliqué tel quel éteindrait les effets gradués sur TOUTE
