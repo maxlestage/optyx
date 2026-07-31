@@ -13,12 +13,17 @@
 	<!-- Crédits de l'app, lisibles dans les informations du bundle. -->
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Maxime Nathan Lestage</string>
-	<!-- Enregistrement des photos développées. SEULE permission demandée :
-	     l'import passe par PhotosPicker (PHPickerViewController), qui
-	     s'exécute hors du processus de l'app et ne réclame donc AUCUN
-	     accès à la photothèque. Demander la lecture serait une permission
-	     de trop, refusée à raison par les utilisateurs. -->
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Optyx enregistre dans vos photos les images développées à travers les objectifs vintage.</string>
+	<!-- NSPhotoLibraryAddUsageDescription n'est PAS déclarée ici : elle
+	     l'est déjà par le réglage de projet
+	     INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription, que
+	     GENERATE_INFOPLIST_FILE fusionne dans ce fichier au build. La
+	     déclarer aux deux endroits donnerait deux textes concurrents pour
+	     une même clé, sans que rien signale lequel l'emporte.
+
+	     C'est la SEULE permission de l'app : l'import passe par
+	     PhotosPicker (PHPickerViewController), qui s'exécute hors du
+	     processus et ne réclame aucun accès à la photothèque. -->
+	<!-- Ni caméra ni micro : cette version n'a ni viseur ni vidéo. -->
+
 </dict>
 </plist>
