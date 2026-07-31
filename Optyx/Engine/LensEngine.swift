@@ -26,8 +26,14 @@ final class LensEngine {
     ///   - backgroundMask: masque d'arrière-plan (blanc = fond) issu d'une
     ///     carte de profondeur Portrait ; remplace le masque radial pour le
     ///     tourbillon, la douceur et les bulles quand il est fourni.
+    ///   - defocusMap: carte du CERCLE DE CONFUSION normalisée (0 = net,
+    ///     1 = flou d'un point à l'infini), linéaire en disparité — voir
+    ///     `DepthExtractor.defocusMap`. Quand elle est là, c'est l'optique
+    ///     qui pilote la défocalisation ; sinon on retombe sur le masque
+    ///     d'arrière-plan, puis sur le masque radial.
     func render(_ input: CIImage, lens: LensProfile, intensity: Double,
-                backgroundMask: CIImage? = nil) -> CIImage {
+                backgroundMask: CIImage? = nil,
+                defocusMap: CIImage? = nil) -> CIImage {
         let extent = input.extent
         guard !extent.isEmpty, intensity > 0 else { return input }
 
@@ -66,7 +72,28 @@ final class LensEngine {
         // sait pas où est le sujet : on retombe sur un masque radial à
         // PLEINE amplitude, sinon le fond serait moins flou qu'avant et
         // le remède empirerait le mal.
+        //
+        // Trois qualités de source, par ordre de fidélité décroissante —
+        // et `defocusScale` dit combien de l'amplitude physique chacune
+        // mérite. Avec le cercle de confusion mesuré, l'amplitude est
+        // celle du verre, sans rabais : c'est le seul cas où la carte SAIT
+        // qu'un pixel est à l'infini. Les deux replis ne font que deviner
+        // le fond ; leur donner le flou de l'infini étalerait les coins
+        // d'une scène entièrement proche.
+        let cocMap = defocusMap.map { fitMask($0, to: extent) }
+        let defocusScale: Double = cocMap != nil ? 1.0 : (depthMask != nil ? 0.72 : 0.52)
         let defocusMask: CIImage = {
+            if let cocMap {
+                // Plancher radial DISCRET (0,3) et tardif : la courbure de
+                // champ d'un vieux verre défocalise réellement les angles
+                // extrêmes, et sans lui une carte de profondeur muette sur
+                // une zone rendrait cette zone parfaitement nette — plus
+                // nette que le centre.
+                let fieldFloor = dimmed(radialMask(extent: extent, center: center,
+                                                   inner: dim * 0.55, outer: dim * 1.05),
+                                        to: 0.3)
+                return maxed(cocMap, fieldFloor)
+            }
             let wideFloor = radialMask(extent: extent, center: center,
                                        inner: dim * 0.24, outer: dim * 0.72)
             guard let depthMask else { return wideFloor }
@@ -91,7 +118,8 @@ final class LensEngine {
         // simplement à mesure que le flou s'intensifie.
         let sharpForPoints = img
         img = applyDefocus(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
-                           mask: defocusMask, graded: depthMask != nil)
+                           mask: defocusMask, graded: cocMap != nil || depthMask != nil,
+                           scale: defocusScale)
         img = applyEdgeSoftness(img, lens: lens, k: k, extent: extent, center: center, dim: dim)
         img = applyHighlightBokeh(img, lens: lens, k: k, extent: extent, dim: dim,
                                   customMask: effectMask, bands: bands,
@@ -115,9 +143,11 @@ final class LensEngine {
 
     /// Rend l'image en UIImage (pour affichage ou sauvegarde).
     func renderUIImage(_ input: CIImage, lens: LensProfile, intensity: Double,
-                       backgroundMask: CIImage? = nil) -> UIImage? {
+                       backgroundMask: CIImage? = nil,
+                       defocusMap: CIImage? = nil) -> UIImage? {
         let output = render(input, lens: lens, intensity: intensity,
-                            backgroundMask: backgroundMask)
+                            backgroundMask: backgroundMask,
+                            defocusMap: defocusMap)
         guard let cg = context.createCGImage(output, from: output.extent) else { return nil }
         return UIImage(cgImage: cg)
     }
@@ -434,27 +464,34 @@ final class LensEngine {
     ///
     /// C'est le trait qui fait lire « objectif ouvert » sur n'importe
     /// quelle scène, mur nu compris : aucun point de lumière n'est requis,
-    /// contrairement aux disques de bokeh. Le sigma vient de l'ouverture
-    /// calculée du verre (`aperture`), pas d'un coefficient global : entre
-    /// le zoom ciné et le Trioplan 100 mm, le rapport est de 1 à 3,7 —
-    /// aucune valeur unique ne pouvait convenir aux neuf.
+    /// contrairement aux disques de bokeh. L'amplitude vient de la FOCALE
+    /// et de l'OUVERTURE réelles du verre (`defocusRadiusFraction`), pas
+    /// d'un coefficient global : entre le zoom ciné et le Trioplan 100 mm,
+    /// le rapport est de 1 à 3,9 — aucune valeur unique ne pouvait
+    /// convenir aux neuf.
     ///
     /// Le flou est GRADUÉ quand la profondeur est disponible : le fond
     /// lointain reçoit une seconde passe, en cascade (les variances
     /// s'additionnent). C'est ce gradient, plus que la valeur absolue,
     /// que l'œil lit comme du relief.
+    ///
+    /// - Parameter scale: fraction de l'amplitude physique accordée à la
+    ///   source du masque — 1 pour un cercle de confusion mesuré, moins
+    ///   pour les replis qui ne font que deviner où est le fond.
     private func applyDefocus(_ img: CIImage, lens: LensProfile, k: Double,
                               extent: CGRect, center: CGPoint, dim: CGFloat,
-                              mask: CIImage, graded: Bool) -> CIImage {
-        let strength = lens.aperture * k
-        // Garde exprimée en PIXELS : un sigma sous 1 px ne se voit à aucune
+                              mask: CIImage, graded: Bool, scale: Double) -> CIImage {
+        let strength = lens.defocusRadiusFraction * k * scale
+        // Garde exprimée en PIXELS : un rayon sous 1 px ne se voit à aucune
         // résolution, et le seuil suit l'image au lieu d'être arbitraire.
         guard strength * dim > 1.0 else { return img }
 
-        // Plafond absolu à 40 px : proportionnel à `dim`, le rayon
-        // atteindrait 74 px en 4K, où le flou coûte cher sans rien ajouter
-        // — au-delà, le fond est déjà une pâte uniforme.
-        let maxRadius = min(dim * strength, 40)
+        // Plafond en FRACTION du petit côté, pas en pixels : un plafond
+        // absolu rendrait l'export 4K moins flou que le viseur — deux
+        // images différentes pour un même objectif. À 4,2 %, seul le
+        // Trioplan est rogné (il demande 4,8 %), et de peu ; au-delà le
+        // fond n'est plus qu'une pâte uniforme, où le verre ne se lit plus.
+        let maxRadius = min(dim * strength, dim * 0.042)
 
         // PYRAMIDE DE DÉFOCALISATION. Sur un vrai objectif, le cercle de
         // confusion croît continûment avec la distance : il n'existe pas
