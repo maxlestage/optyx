@@ -454,25 +454,36 @@ final class LensEngine {
         // Plafond absolu à 40 px : proportionnel à `dim`, le rayon
         // atteindrait 74 px en 4K, où le flou coûte cher sans rien ajouter
         // — au-delà, le fond est déjà une pâte uniforme.
-        let sigma = min(dim * strength, 40)
-        let blurred = defocusedCopy(of: img, lens: lens, radius: sigma, extent: extent)
-        let blend = CIFilter.blendWithMask()
-        blend.inputImage = blurred
-        blend.backgroundImage = img
-        blend.maskImage = mask
-        guard var out = blend.outputImage else { return img }
+        let maxRadius = min(dim * strength, 40)
 
-        // Seconde passe sur le fond LOINTAIN seulement : le fond éloigné
-        // fond davantage que le fond proche, et c'est ce GRADIENT que
-        // l'œil lit comme du relief.
-        guard graded else { return out.cropped(to: extent) }
-        let far = ramp(mask, from: 0.60, to: 1.0)
-        let deeper = defocusedCopy(of: out, lens: lens, radius: sigma * 0.9, extent: extent)
-        let deepBlend = CIFilter.blendWithMask()
-        deepBlend.inputImage = deeper
-        deepBlend.backgroundImage = out
-        deepBlend.maskImage = far
-        out = deepBlend.outputImage ?? out
+        // PYRAMIDE DE DÉFOCALISATION. Sur un vrai objectif, le cercle de
+        // confusion croît continûment avec la distance : il n'existe pas
+        // « une » zone floue mais un dégradé. Deux niveaux laissaient une
+        // marche visible entre le sujet net et le fond ; trois donnent un
+        // fondu que l'œil lit comme de la profondeur.
+        //
+        // Chaque niveau est empilé sur la sortie du précédent, en ne
+        // touchant que la tranche de distance qui lui revient — le rayon
+        // effectif s'y accumule, comme le fait le cercle de confusion.
+        // Les tranches se recouvrent volontairement : une frontière nette
+        // entre deux niveaux se verrait comme un contour.
+        let levels: [(radius: CGFloat, from: CGFloat, to: CGFloat)] = graded
+            ? [(maxRadius * 0.45, 0.10, 0.45),
+               (maxRadius * 0.70, 0.40, 0.75),
+               (maxRadius, 0.70, 1.00)]
+            : [(maxRadius * 0.60, 0.10, 0.55),
+               (maxRadius, 0.50, 1.00)]
+
+        var out = img
+        for level in levels {
+            let blurred = defocusedCopy(of: out, lens: lens,
+                                        radius: level.radius, extent: extent)
+            let blend = CIFilter.blendWithMask()
+            blend.inputImage = blurred
+            blend.backgroundImage = out
+            blend.maskImage = ramp(mask, from: level.from, to: level.to)
+            out = blend.outputImage ?? out
+        }
         return out.cropped(to: extent)
     }
 
@@ -495,22 +506,44 @@ final class LensEngine {
     /// l'API rend un optionnel, la chaîne ne doit jamais s'interrompre.
     private func defocusedCopy(of img: CIImage, lens: LensProfile,
                                radius: CGFloat, extent: CGRect) -> CIImage {
-        let clamped = img.clampedToExtent()
-        let bokeh = CIFilter.bokehBlur()
-        bokeh.inputImage = clamped
         // Le rayon d'un disque vaut environ le double du sigma d'une
-        // gaussienne d'étalement comparable ; borné à la plage du filtre.
-        bokeh.radius = Float(min(500, max(1, radius * 2)))
+        // gaussienne d'étalement comparable.
+        let discRadius = max(1, radius * 2)
+
+        // TRAVAIL EN RÉSOLUTION RÉDUITE. Le coût d'un bokeh croît avec le
+        // carré du rayon : à 80 px il devient le poste le plus lourd de la
+        // trame. Or une image déjà défocalisée ne contient, par
+        // définition, aucun détail fin — la réduire avant de la flouter ne
+        // perd rien et divise le coût d'autant. On vise un rayon de
+        // travail d'une douzaine de pixels, quelle que soit la résolution
+        // de départ : c'est ce qui rend le rendu identique du viseur à
+        // l'export 3200 px, là où un rayon en pixels absolus donnerait
+        // deux images différentes.
+        let scale = min(1, 14 / discRadius)
+        let source = img.clampedToExtent()
+        let small = scale < 1
+            ? source.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            : source
+
+        let bokeh = CIFilter.bokehBlur()
+        bokeh.inputImage = small.clampedToExtent()
+        bokeh.radius = Float(min(500, max(1, discRadius * scale)))
         // L'anneau de bord EST la signature du verre : marqué sur le
         // triplet Trioplan dont l'aberration sphérique n'est pas corrigée,
         // absent des formules modernes bien corrigées.
         bokeh.ringAmount = Float(min(1, lens.bubble))
         bokeh.ringSize = Float(0.10 + 0.10 * min(1, lens.bubble))
         bokeh.softness = 1.0
-        if let out = bokeh.outputImage {
-            return out.cropped(to: extent)
+
+        guard let blurred = bokeh.outputImage else {
+            // Repli : l'API rend un optionnel, la chaîne ne doit jamais
+            // s'interrompre.
+            return source.applyingGaussianBlur(sigma: radius).cropped(to: extent)
         }
-        return clamped.applyingGaussianBlur(sigma: radius).cropped(to: extent)
+        guard scale < 1 else { return blurred.cropped(to: extent) }
+        return blurred
+            .transformed(by: CGAffineTransform(scaleX: 1 / scale, y: 1 / scale))
+            .cropped(to: extent)
     }
 
     /// Perte de piqué vers les bords du CHAMP — une aberration radiale,
