@@ -1,5 +1,5 @@
 // Scènes bokeh en pur CSS/SVG — même esthétique que les visuels App
-// Store (marketing/appstore/generate.py), sans aucune image à charger.
+// Store, sans aucune image à charger.
 
 /** Générateur pseudo-aléatoire déterministe : mêmes scènes à chaque rendu. */
 function rng(seed) {

@@ -1,8 +1,8 @@
 # Site vitrine d'Optyx
 
-Site React mobile-first présentant les 9 objectifs simulés par l'app.
-Aucune image à charger : les scènes bokeh sont générées en CSS/SVG,
-dans l'esthétique des visuels App Store (`marketing/appstore/`).
+Site React mobile-first présentant les 9 objectifs vintage.
+Aucune image à charger : les scènes bokeh sont générées en CSS/SVG et
+en WebGL (React Three Fiber).
 
 ## Développement
 
@@ -54,6 +54,6 @@ docker build -t optyx-site .
 docker run -p 8080:8080 optyx-site  # http://localhost:8080
 ```
 
-Les données des objectifs (`src/lenses.js`) sont le miroir du catalogue
-de l'app (`Optyx/Models/LensProfile.swift`) — toute évolution du
-catalogue doit être répercutée ici.
+Les données des objectifs vivent dans `src/lenses.js` : c'est la source
+unique du catalogue (fiches, scènes 3D, caractéristiques). Elles étaient
+autrefois le miroir du catalogue de l'app iOS, retirée du dépôt.

@@ -1,12 +1,17 @@
 name: CI
 
-# CI complète du projet : compilation de l'app iOS sur simulateur
-# (sans signature — aucun certificat requis sur les runners GitHub),
-# puis merge automatique de la pull request quand le build est vert.
-# La CI ne modifie JAMAIS le projet : pas de bump de version
-# (MARKETING_VERSION / CURRENT_PROJECT_VERSION restent tels quels),
-# aucun commit généré. La livraison TestFlight reste du ressort
-# de Xcode Cloud (voir ci_scripts/).
+# CI du projet : compilation du site vitrine (site/), puis merge
+# automatique de la pull request quand le build est vert.
+#
+# Cette CI compilait auparavant l'app iOS sur simulateur. L'app a été
+# retirée du dépôt ; laisser un `xcodebuild` sans projet Xcode aurait
+# rendu la CI rouge en permanence, et supprimer le fichier aurait
+# emporté avec lui le merge automatique — d'où le remplacement du job de
+# build plutôt que sa suppression.
+#
+# La CI ne modifie JAMAIS le dépôt : aucun bump de version, aucun commit
+# généré. Le déploiement du site est traité par deploy-site.yml
+# (GitHub Pages) et par Heroku (heroku.yml).
 
 on:
   push:
@@ -15,29 +20,24 @@ on:
 
 jobs:
   build:
-    name: Build iOS (simulateur)
-    runs-on: macos-latest
+    name: Build du site
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Sélectionner le Xcode le plus récent du runner
-        run: |
-          XCODE="$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)"
-          echo "Xcode sélectionné : $XCODE"
-          sudo xcode-select -s "$XCODE"
-          xcodebuild -version
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: site/package-lock.json
 
-      - name: Compiler Optyx (Debug, iphonesimulator, sans signature)
-        run: |
-          set -o pipefail
-          xcodebuild build \
-            -project Optyx.xcodeproj \
-            -target Optyx \
-            -sdk iphonesimulator \
-            -configuration Debug \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_IDENTITY="" \
-            ONLY_ACTIVE_ARCH=NO
+      - name: Installer les dépendances
+        working-directory: site
+        run: npm ci --include=dev --no-audit --no-fund
+
+      - name: Compiler le site
+        working-directory: site
+        run: npm run build
 
   automerge:
     name: Merge automatique
