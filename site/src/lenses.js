@@ -1,4 +1,4 @@
-// Catalogue des 9 objectifs — miroir de Optyx/Models/LensProfile.swift.
+// Catalogue des 9 objectifs — source unique des fiches et des scènes.
 // `scene` pilote le visuel CSS des cartes, `three` la scène React Three
 // Fiber du héros, `accent` teinte la carte, `signature` est la phrase
 // d'accroche, `traits` liste les caractéristiques (valeurs de l'app).
