@@ -55,6 +55,29 @@ final class LensEngine {
         // sous-graphes identiques mais distincts, que Core Image ne peut
         // pas fusionner — travail triplé pour rien.
         let bands = effectMask.map { depthBands($0) }
+
+        // Masque DÉDIÉ à la défocalisation, distinct de celui des
+        // aberrations. Deux raisons : le fond doit fondre selon la
+        // DISTANCE, pas selon la position dans le cadre ; et l'union
+        // radiale des aberrations atteint 1 sur près d'un tiers de la
+        // surface, ce qui noierait l'épaule d'un sujet qui touche le bord.
+        //
+        // Sans profondeur — le cas des photos importées au Studio — on ne
+        // sait pas où est le sujet : on retombe sur un masque radial à
+        // PLEINE amplitude, sinon le fond serait moins flou qu'avant et
+        // le remède empirerait le mal.
+        let defocusMask: CIImage = {
+            let wideFloor = radialMask(extent: extent, center: center,
+                                       inner: dim * 0.24, outer: dim * 0.72)
+            guard let depthMask else { return wideFloor }
+            // Avec profondeur : plancher plus tardif et de demi-amplitude,
+            // la distance mesurée gouverne le reste.
+            let gentleFloor = dimmed(radialMask(extent: extent, center: center,
+                                                inner: dim * 0.40, outer: dim * 0.95),
+                                     to: 0.5)
+            return maxed(ramp(depthMask, from: 0.55, to: 0.95), gentleFloor)
+        }()
+
         var img = input
 
         img = applyTone(img, lens: lens, k: k)
@@ -63,10 +86,17 @@ final class LensEngine {
         img = applyCineTone(img, lens: lens, k: k)
         img = applySwirl(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
                          customMask: effectMask, bands: bands)
-        img = applyEdgeSoftness(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
-                                customMask: effectMask)
+        // Les points de lumière sont repérés sur l'image NETTE : après la
+        // défocalisation il n'en resterait aucun, et les disques de bokeh
+        // — la signature de chaque verre — disparaîtraient purement et
+        // simplement à mesure que le flou s'intensifie.
+        let sharpForPoints = img
+        img = applyDefocus(img, lens: lens, k: k, extent: extent, center: center, dim: dim,
+                           mask: defocusMask, graded: depthMask != nil)
+        img = applyEdgeSoftness(img, lens: lens, k: k, extent: extent, center: center, dim: dim)
         img = applyHighlightBokeh(img, lens: lens, k: k, extent: extent, dim: dim,
-                                  customMask: effectMask, bands: bands)
+                                  customMask: effectMask, bands: bands,
+                                  pointSource: sharpForPoints)
         // Le glow reçoit lui aussi l'union : gater le halo par la seule
         // profondeur l'éteignait entièrement dans les scènes proches.
         img = applyGlow(img, lens: lens, k: k, dim: dim, extent: extent,
@@ -377,27 +407,74 @@ final class LensEngine {
         return arcOverlay(on: blend.outputImage ?? img, mask: mask)
     }
 
-    /// Perte de piqué progressive vers les bords du champ.
-    private func applyEdgeSoftness(_ img: CIImage, lens: LensProfile, k: Double,
-                                   extent: CGRect, center: CGPoint, dim: CGFloat,
-                                   customMask: CIImage? = nil) -> CIImage {
-        let strength = lens.softness * k
-        guard strength > 0.02 else { return img }
+    /// DÉFOCALISATION DE L'ARRIÈRE-PLAN — la séparation sujet/fond.
+    ///
+    /// C'est le trait qui fait lire « objectif ouvert » sur n'importe
+    /// quelle scène, mur nu compris : aucun point de lumière n'est requis,
+    /// contrairement aux disques de bokeh. Le sigma vient de l'ouverture
+    /// calculée du verre (`aperture`), pas d'un coefficient global : entre
+    /// le zoom ciné et le Trioplan 100 mm, le rapport est de 1 à 3,7 —
+    /// aucune valeur unique ne pouvait convenir aux neuf.
+    ///
+    /// Le flou est GRADUÉ quand la profondeur est disponible : le fond
+    /// lointain reçoit une seconde passe, en cascade (les variances
+    /// s'additionnent). C'est ce gradient, plus que la valeur absolue,
+    /// que l'œil lit comme du relief.
+    private func applyDefocus(_ img: CIImage, lens: LensProfile, k: Double,
+                              extent: CGRect, center: CGPoint, dim: CGFloat,
+                              mask: CIImage, graded: Bool) -> CIImage {
+        let strength = lens.aperture * k
+        // Garde exprimée en PIXELS : un sigma sous 1 px ne se voit à aucune
+        // résolution, et le seuil suit l'image au lieu d'être arbitraire.
+        guard strength * dim > 1.0 else { return img }
+
         // Flou gaussien + mélange masqué plutôt que CIMaskedVariableBlur :
-        // ce dernier est le filtre le plus lent de Core Image (échantillonnage
-        // à rayon variable par pixel), alors qu'avec un masque déjà adouci le
-        // fondu net → flou est visuellement identique — pour une fraction
-        // du coût, sur tous les profils.
-        // Douceur contenue : à 0.016, le flou transformait tout
-        // l'arrière-plan en bouillie grise sur les photos pleine
-        // résolution — plus aucun détail, image terne. Le fondu
-        // net → flou reste visible, mais l'image garde sa clarté.
-        let sigma = dim * 0.010 * strength
+        // ce dernier est le filtre le plus lent de Core Image (rayon
+        // variable échantillonné par pixel), alors qu'avec un masque déjà
+        // adouci le fondu net → flou est visuellement identique, pour une
+        // fraction du coût.
+        // Plafond absolu à 40 px : proportionnel à `dim`, le sigma
+        // atteindrait 74 px en 4K, où le flou coûte cher sans rien ajouter
+        // — au-delà de 40 px le fond est déjà une pâte uniforme.
+        let sigma = min(dim * strength, 40)
         let blurred = img.clampedToExtent()
             .applyingGaussianBlur(sigma: sigma)
             .cropped(to: extent)
-        let mask = customMask ?? radialMask(extent: extent, center: center,
-                                            inner: dim * 0.28, outer: dim * 0.72)
+        let blend = CIFilter.blendWithMask()
+        blend.inputImage = blurred
+        blend.backgroundImage = img
+        blend.maskImage = mask
+        guard var out = blend.outputImage else { return img }
+
+        // Seconde passe sur le fond LOINTAIN seulement. En cascade sur la
+        // sortie précédente : σ_total = √(σ² + (0,9σ)²) ≈ 1,35 σ, obtenu
+        // pour le coût d'un flou de 0,9 σ.
+        guard graded else { return out.cropped(to: extent) }
+        let far = ramp(mask, from: 0.60, to: 1.0)
+        let deeper = out.clampedToExtent()
+            .applyingGaussianBlur(sigma: sigma * 0.9)
+            .cropped(to: extent)
+        let deepBlend = CIFilter.blendWithMask()
+        deepBlend.inputImage = deeper
+        deepBlend.backgroundImage = out
+        deepBlend.maskImage = far
+        out = deepBlend.outputImage ?? out
+        return out.cropped(to: extent)
+    }
+
+    /// Perte de piqué vers les bords du CHAMP — une aberration radiale,
+    /// distincte de la défocalisation : elle touche les coins quelle que
+    /// soit la distance, et reste discrète.
+    private func applyEdgeSoftness(_ img: CIImage, lens: LensProfile, k: Double,
+                                   extent: CGRect, center: CGPoint, dim: CGFloat) -> CIImage {
+        let strength = lens.softness * k
+        guard strength > 0.02 else { return img }
+        let sigma = dim * 0.008 * strength
+        let blurred = img.clampedToExtent()
+            .applyingGaussianBlur(sigma: sigma)
+            .cropped(to: extent)
+        let mask = radialMask(extent: extent, center: center,
+                              inner: dim * 0.34, outer: dim * 0.80)
         let blend = CIFilter.blendWithMask()
         blend.inputImage = blurred
         blend.backgroundImage = img
@@ -421,17 +498,21 @@ final class LensEngine {
     private func applyHighlightBokeh(_ img: CIImage, lens: LensProfile, k: Double,
                                      extent: CGRect, dim: CGFloat,
                                      customMask: CIImage? = nil,
-                                     bands: [(factor: Double, weight: CIImage)]? = nil) -> CIImage {
+                                     bands: [(factor: Double, weight: CIImage)]? = nil,
+                                     pointSource: CIImage? = nil) -> CIImage {
         let strength = lens.bokeh * k
         guard strength > 0.15 else { return img }
         // Au-delà de la moitié, le disque est creux : c'est une bulle.
         let hollow = lens.bubble > 0.5
 
+        // Détection sur l'image NETTE fournie par render() : le flou de
+        // défocalisation a déjà effacé les points de lumière de `img`.
         // Avec un masque de profondeur, seules les hautes lumières de
         // l'ARRIÈRE-PLAN engendrent des disques : celles du sujet
         // (chemise blanche, reflets du visage) produisaient des taches
         // collées à la silhouette au lieu de venir du fond.
-        let source = customMask.map { multiplied(img, $0) } ?? img
+        let detectSource = pointSource ?? img
+        let source = customMask.map { multiplied(detectSource, $0) } ?? detectSource
         guard let highlights = pointHighlights(of: source, extent: extent, dim: dim)
         else { return img }
 
@@ -686,10 +767,18 @@ final class LensEngine {
         // à toutes les résolutions, et un simple souffle dans les angles
         // (assombrissement max ~14 % au fin fond des coins) : le
         // vignettage signe les angles sans manger la lumière du cadre.
+        // Amplitude et portée d'un vrai vignettage : c'est le SEUL effet
+        // de toute la chaîne qui se lise sur n'importe quelle scène, mur
+        // nu compris, et le moins cher (un gradient et deux filtres
+        // ponctuels). À 14 % il ne se voyait pas ; à 32 %, modulés par le
+        // profil (0,20 pour le Summicron, 0,65 pour le Noctilux), il
+        // signe le cadre. Le gamma resserre la chute sur les angles :
+        // le centre de l'image reste intact.
         let corner = hypot(extent.width, extent.height) / 2
-        let darkened = dimmed(img, to: 1 - 0.14 * CGFloat(strength))
+        let darkened = dimmed(img, to: 1 - 0.32 * CGFloat(strength))
         let mask = radialMask(extent: extent, center: center,
-                              inner: corner * 0.74, outer: corner * 1.02)
+                              inner: corner * 0.42, outer: corner * 1.02)
+            .applyingFilter("CIGammaAdjust", parameters: ["inputPower": 1.8])
         let blend = CIFilter.blendWithMask()
         blend.inputImage = darkened
         blend.backgroundImage = img
