@@ -1,23 +1,33 @@
 import SwiftUI
 import UIKit
 
-/// Vue racine : deux onglets, rien de plus.
+/// Vue racine : trois onglets, rien de plus.
 ///
-/// Le périmètre est délibérément resserré (catalogue + studio photo). La version
-/// précédente de l'app empilait caméra temps réel, vidéo, profondeur et RAW, et
-/// s'est noyée dans cette ampleur. Deux onglets, c'est aussi une promesse tenue
-/// vis-à-vis de l'utilisateur : ce qu'il voit animé dans le catalogue est
-/// exactement ce que le studio appliquera à sa photo, puisque les deux partagent
-/// le même profil de disque de bokeh.
+/// Le périmètre reste délibérément resserré (prise de vue + catalogue + studio
+/// photo). La version précédente de l'app empilait caméra temps réel, VIDÉO,
+/// profondeur et RAW, et s'est noyée dans cette ampleur : ce qui revient ici,
+/// c'est le viseur SEUL, sans une ligne de vidéo ni de carte de profondeur.
+///
+/// Ces trois onglets sont aussi une promesse tenue vis-à-vis de l'utilisateur :
+/// ce qu'il voit animé dans le catalogue, ce que le viseur lui montre en direct
+/// et ce que le studio applique à sa photo sont une seule et même chose,
+/// puisque tous passent par `MoteurOptique` et par le même profil de bokeh.
 struct RootView: View {
     /// Sélection typée plutôt qu'un `Int`. Un index nu se décale silencieusement
     /// dès qu'on réordonne les onglets ; un cas d'énumération casse à la
     /// compilation, ce qui est exactement ce qu'on veut d'un compilateur.
     private enum Onglet: Hashable {
+        case photo
         case objectifs
         case studio
     }
 
+    /// L'app s'ouvre sur le CATALOGUE, pas sur la prise de vue, bien que
+    /// celle-ci soit le premier onglet : afficher le viseur au lancement
+    /// déclencherait la demande d'autorisation caméra avant que l'utilisateur
+    /// n'ait rien vu de l'app — la façon la plus sûre de se la faire refuser.
+    /// Il ouvre l'onglet Photo quand il l'a décidé, et la demande arrive alors
+    /// au moment où elle s'explique d'elle-même.
     @State private var onglet: Onglet = .objectifs
 
     init() {
@@ -42,6 +52,16 @@ struct RootView: View {
 
     var body: some View {
         TabView(selection: $onglet) {
+            // Le viseur en premier : c'est le geste le plus fréquent une fois
+            // l'app connue. La fermeture de secours des panneaux « caméra
+            // refusée » et « aucune caméra » renvoie vers le studio, pour
+            // qu'un refus d'autorisation ne laisse jamais dans une impasse.
+            VueCamera(allerAuStudio: { onglet = .studio })
+                .tag(Onglet.photo)
+                .tabItem {
+                    Label("Photo", systemImage: "camera.fill")
+                }
+
             CatalogView()
                 .tag(Onglet.objectifs)
                 .tabItem {

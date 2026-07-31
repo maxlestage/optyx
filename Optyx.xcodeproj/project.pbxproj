@@ -255,6 +255,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Optyx affiche dans le viseur, en direct, le rendu de l'objectif vintage choisi, et l'applique aux photos que vous prenez.";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Optyx enregistre dans vos photos les images développées à travers les objectifs vintage.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -286,6 +287,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Optyx affiche dans le viseur, en direct, le rendu de l'objectif vintage choisi, et l'applique aux photos que vous prenez.";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Optyx enregistre dans vos photos les images développées à travers les objectifs vintage.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
