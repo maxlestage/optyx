@@ -54,6 +54,11 @@ struct LensProfile: Identifiable, Hashable {
     /// avec `softness`, qui reste la perte de piqué vers les bords du
     /// CHAMP — une aberration radiale, pas un effet de distance.
     var aperture: Double = 0
+    /// Voile onirique (effet Orton) : une copie floue incrustée en écran
+    /// sur tout le cadre. Distinct de `glow`, qui est la halation autour
+    /// des seules hautes lumières — le voile, lui, se voit sur n'importe
+    /// quelle scène, ce qui en fait la signature du Dream Lens.
+    var veil: Double = 0
 }
 
 extension LensProfile {
@@ -80,7 +85,7 @@ extension LensProfile {
             era: "1958 – années 1990",
             story: "Copie soviétique du Zeiss Biotar, produit à des millions d'exemplaires. Son bokeh tourbillonnant culte transforme les arrière-plans en spirale autour du sujet. Très abordable, c'est la porte d'entrée du monde vintage.",
             swirl: 1.00, bubble: 0.15, softness: 0.30, glow: 0.30, vignette: 0.45,
-            chroma: 0.35, warmth: 0.25, fade: 0.20, saturation: 1.03, grain: 0.20,
+            chroma: 0.35, warmth: -0.3, fade: 0.20, saturation: 1.03, grain: 0.20,
             bokeh: 0.55,
             aperture: 0.0117
         ),
@@ -93,7 +98,7 @@ extension LensProfile {
             era: "1936 – 1960",
             story: "L'original allemand dont l'Helios est la copie. Même tourbillon, mais avec un rendu un peu plus doux et raffiné. Plus rare et nettement plus cher que son clone soviétique.",
             swirl: 0.85, bubble: 0.20, softness: 0.25, glow: 0.35, vignette: 0.38,
-            chroma: 0.30, warmth: 0.15, fade: 0.18, saturation: 1.00, grain: 0.15,
+            chroma: 0.30, warmth: 0.45, fade: 0.18, saturation: 1.00, grain: 0.15,
             bokeh: 0.5,
             aperture: 0.0117
         ),
@@ -106,7 +111,7 @@ extension LensProfile {
             era: "1916 – 1970",
             story: "Un triplet optique tout simple dont l'aberration sphérique non corrigée produit le fameux bokeh « bulles de savon » : chaque point lumineux hors mise au point devient un anneau brillant.",
             swirl: 0.15, bubble: 1.00, softness: 0.30, glow: 0.45, vignette: 0.30,
-            chroma: 0.45, warmth: 0.20, fade: 0.20, saturation: 1.08, grain: 0.15,
+            chroma: 0.45, warmth: 0.2, fade: 0.20, saturation: 1.08, grain: 0.15,
             bokeh: 1.0,
             aperture: 0.0257
         ),
@@ -119,7 +124,7 @@ extension LensProfile {
             era: "1953 – aujourd'hui",
             story: "Le classique du reportage : micro-contraste superbe, rendu précis mais jamais clinique. Un « défaut » discret : un léger vignettage et une signature douce à pleine ouverture.",
             swirl: 0.00, bubble: 0.00, softness: 0.10, glow: 0.15, vignette: 0.20,
-            chroma: 0.05, warmth: 0.05, fade: 0.08, saturation: 1.06, grain: 0.10,
+            chroma: 0.05, warmth: 0.0, fade: 0.08, saturation: 1.06, grain: 0.10,
             punch: 0.70,
             bokeh: 0.25,
             aperture: 0.0086
@@ -133,9 +138,10 @@ extension LensProfile {
             era: "1976 – 2008",
             story: "Le roi de la nuit chez Leica. À f/1, l'image baigne dans un glow onirique, le vignettage est massif et la zone de netteté se réduit à un fil. Un rendu immédiatement reconnaissable.",
             swirl: 0.25, bubble: 0.10, softness: 0.45, glow: 0.95, vignette: 0.65,
-            chroma: 0.25, warmth: 0.10, fade: 0.15, saturation: 0.98, grain: 0.15,
+            chroma: 0.25, warmth: 0.0, fade: 0.15, saturation: 0.98, grain: 0.15,
             bokeh: 0.85,
-            aperture: 0.0172
+            aperture: 0.0172,
+            veil: 0.35
         ),
 
         LensProfile(
@@ -146,9 +152,10 @@ extension LensProfile {
             era: "1961 – 1970",
             story: "Quasi mythique, très peu produit. À f/0.95, le monde devient un rêve : halos généreux, contraste évanescent, netteté fragile. C'est précisément ce voile onirique qui fait sa légende.",
             swirl: 0.30, bubble: 0.15, softness: 0.80, glow: 1.00, vignette: 0.50,
-            chroma: 0.50, warmth: 0.15, fade: 0.25, saturation: 0.96, grain: 0.20,
+            chroma: 0.50, warmth: 0.0, fade: 0.25, saturation: 0.96, grain: 0.20,
             bokeh: 1.0,
-            aperture: 0.0181
+            aperture: 0.0181,
+            veil: 1.0
         ),
 
         LensProfile(
@@ -159,7 +166,7 @@ extension LensProfile {
             era: "1964 – 1975",
             story: "Son verre au thorium, légèrement radioactif, jaunit avec les décennies et donne aux images une chaleur dorée inimitable. Construction magnifique, mise au point soyeuse.",
             swirl: 0.10, bubble: 0.10, softness: 0.20, glow: 0.35, vignette: 0.30,
-            chroma: 0.15, warmth: 1.00, fade: 0.15, saturation: 1.02, grain: 0.15,
+            chroma: 0.15, warmth: 1.0, fade: 0.15, saturation: 1.02, grain: 0.15,
             bokeh: 0.45,
             aperture: 0.0123
         ),
@@ -172,10 +179,11 @@ extension LensProfile {
             era: "1977 – 1997",
             story: "Conçu pour photographier la nuit : sa lentille asphérique polie à la main dompte le coma des points lumineux. Contraste élevé pour son époque, léger halo à pleine ouverture.",
             swirl: 0.10, bubble: 0.05, softness: 0.15, glow: 0.55, vignette: 0.40,
-            chroma: 0.10, warmth: 0.00, fade: 0.08, saturation: 1.08, grain: 0.30,
+            chroma: 0.10, warmth: -0.2, fade: 0.08, saturation: 1.08, grain: 0.30,
             punch: 0.85,
             bokeh: 0.3,
-            aperture: 0.0194
+            aperture: 0.0194,
+            veil: 0.12
         ),
 
         LensProfile(
@@ -186,7 +194,7 @@ extension LensProfile {
             era: "1956 – aujourd'hui",
             story: "Les zooms de cinéma légendaires de Pierre Angénieux, utilisés d'Hollywood à la Nouvelle Vague. Rendu ciné par excellence : contraste doux, couleurs chaudes, grain présent.",
             swirl: 0.05, bubble: 0.10, softness: 0.25, glow: 0.45, vignette: 0.35,
-            chroma: 0.20, warmth: 0.40, fade: 0.30, saturation: 0.93, grain: 0.60,
+            chroma: 0.20, warmth: 0.4, fade: 0.30, saturation: 0.93, grain: 0.60,
             cine: 0.85,
             bokeh: 0.45,
             aperture: 0.0069
@@ -204,7 +212,8 @@ extension LensProfile {
             ("Halo / glow", glow),
             ("Vignettage", vignette),
             ("Aberration chromatique", chroma),
-            ("Dérive chaude", warmth),
+            ("Dérive de couleur", abs(warmth)),
+            ("Voile onirique", veil),
             ("Voile / contraste bas", fade),
             ("Grain", grain),
             ("Micro-contraste", punch),
