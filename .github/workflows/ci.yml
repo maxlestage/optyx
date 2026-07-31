@@ -1,13 +1,15 @@
 name: CI
 
-# CI du projet : compilation du site vitrine (site/), puis merge
-# automatique de la pull request quand le build est vert.
+# CI du projet : compilation de l'app iOS (Optyx.xcodeproj) ET du site
+# vitrine (site/), puis merge automatique de la pull request quand les
+# deux builds sont verts.
 #
-# Cette CI compilait auparavant l'app iOS sur simulateur. L'app a été
-# retirée du dépôt ; laisser un `xcodebuild` sans projet Xcode aurait
-# rendu la CI rouge en permanence, et supprimer le fichier aurait
-# emporté avec lui le merge automatique — d'où le remplacement du job de
-# build plutôt que sa suppression.
+# L'app iOS avait été retirée du dépôt, et le job xcodebuild supprimé
+# avec elle. L'app est revenue : le job est rétabli. Sans lui, une CI
+# verte ne prouverait RIEN sur le Swift et l'auto-merge livrerait du code
+# jamais compilé — la première compilation réelle n'aurait lieu que dans
+# Xcode Cloud, au moment de l'archive TestFlight, c'est-à-dire au pire
+# endroit pour découvrir une erreur.
 #
 # La CI ne modifie JAMAIS le dépôt : aucun bump de version, aucun commit
 # généré. Le déploiement du site est traité par deploy-site.yml
@@ -19,6 +21,45 @@ on:
   pull_request:
 
 jobs:
+  build-ios:
+    name: Build de l'app iOS
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Optyx.xcodeproj est au format objectVersion 77
+      # (PBXFileSystemSynchronizedRootGroup) : il n'est lisible qu'à
+      # partir de Xcode 16. On sélectionne donc explicitement le Xcode le
+      # plus récent installé sur l'image, au lieu de dépendre de celui
+      # que GitHub a mis par défaut.
+      - name: Sélectionner le Xcode le plus récent
+        run: |
+          DERNIER=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$DERNIER" ]; then
+            echo "Xcode retenu : $DERNIER"
+            sudo xcode-select -s "$DERNIER"
+          else
+            echo "Aucun /Applications/Xcode*.app trouvé — on garde le Xcode par défaut."
+          fi
+          xcodebuild -version
+
+      # Le projet ne contient aucun scheme partagé (pas de
+      # xcshareddata/xcschemes) : `-scheme Optyx` échouerait sur un
+      # checkout propre. On compile donc la cible directement, ce qui ne
+      # dépend que du pbxproj. `-sdk iphonesimulator` évite toute
+      # signature, et le duo CODE_SIGNING_* garantit qu'aucun certificat
+      # n'est réclamé sur un runner sans trousseau de développeur.
+      - name: Compiler l'app pour le simulateur
+        run: |
+          xcodebuild build \
+            -project Optyx.xcodeproj \
+            -target Optyx \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
   build:
     name: Build du site
     runs-on: ubuntu-latest
@@ -41,9 +82,11 @@ jobs:
 
   automerge:
     name: Merge automatique
-    needs: build
-    # Uniquement les PR du dépôt lui-même (jamais un fork) : le build
-    # vert vaut validation, la PR est mergée sans intervention.
+    # Les DEUX builds doivent être verts : le Swift doit avoir compilé
+    # avant qu'une ligne d'app iOS ne soit mergée.
+    needs: [build-ios, build]
+    # Uniquement les PR du dépôt lui-même (jamais un fork) : les builds
+    # verts valent validation, la PR est mergée sans intervention.
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository

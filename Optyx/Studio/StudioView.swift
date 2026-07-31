@@ -1,4 +1,3 @@
-import CoreImage
 import Photos
 import PhotosUI
 import SwiftUI
@@ -12,33 +11,13 @@ import UIKit
 // profondeur et RAW, et s'y est noyée sans jamais régler le seul reproche qui
 // comptait : « les effets ne se voient pas ».
 //
-// HONNÊTETÉ DU RENDU, qui commande tout ce fichier : un objectif ancien ne se
-// voit QUE sur les points lumineux hors mise au point. Sur une photo
-// d'intérieur uniforme, un vrai 58 mm f/2 ne montre rien non plus — et
-// l'ancienne app, qui simulait cela « correctement », montrait donc rien du
-// tout. Ici on part des HAUTES LUMIÈRES de la photo et on y dessine les mêmes
-// disques que le catalogue : bord adouci par `soft`, centre creusé par `ring`,
-// liseré par `rim`, frange chromatique par `fringe`, aigrettes par `spike`.
-// L'état vide dit franchement quelles photos s'y prêtent, plutôt que de
-// laisser l'utilisateur croire à une panne.
-//
-// COMPOSITION : jamais d'addition ni de mélange en alpha normal. Uniquement
-// `CIScreenBlendMode`, `CIMaximumCompositing` et des `CIColorMatrix` dont la
-// ligne alpha reste (0, 0, 0, 1). Sommer deux calques prémultipliés d'alpha 1
-// donne un alpha 2 que la composition suivante réinterprète : c'est le bug qui
-// a noirci deux fois l'ancienne app, et on supprime le mécanisme au lieu de le
-// désamorcer.
-
-// MARK: - Contexte Core Image partagé
-
-/// Un seul contexte pour toute la durée de vie de l'app.
-///
-/// `CIContext` compile ses noyaux à la première utilisation et les met en
-/// cache ; en recréer un à chaque mouvement du curseur rendrait chaque aperçu
-/// aussi lent que le premier. Il est documenté comme utilisable depuis
-/// plusieurs fils, ce qui est exactement l'usage ici (les rendus vivent dans
-/// des tâches détachées).
-private let contexteImages = CIContext()
+// CE FICHIER NE CALCULE RIEN. Tout le rendu vit dans `MoteurOptique`
+// (Studio/MoteurOptique.swift), appelé aussi par le viseur caméra. Il n'y a
+// aucune bonne raison de dupliquer un moteur : ce dépôt a déjà porté deux
+// chemins de rendu, ils ont divergé, et l'utilisateur a passé une douzaine
+// d'itérations à répéter « ce n'est pas ce que je vois ».
+// Ce qui reste ici relève strictement de l'interface : import, aperçu
+// anti-rebondi, comparaison par appui long, export et photothèque.
 
 // MARK: - Vue principale
 
@@ -243,12 +222,14 @@ struct StudioView: View {
                 .font(Theme.Police.signatureCarte)
                 .foregroundColor(Theme.Couleur.texte)
 
-            // Cette phrase est la contrepartie honnête du produit. Un
-            // objectif ancien ne se voit que là où il y a des points lumineux
-            // hors mise au point ; le dire évite la déception qu'a produite
-            // l'ancienne app, qui promettait un effet sur n'importe quelle
-            // image et n'en montrait aucun.
-            Text("Les objectifs se voient surtout sur les scènes qui portent des points lumineux — guirlandes, ville de nuit, reflets sur l'eau, contre-jour.")
+            // La phrase précédente annonçait que les objectifs « se voient
+            // surtout sur les scènes qui portent des points lumineux ». C'était
+            // devenu une excuse infondée : depuis que la défocalisation de
+            // l'arrière-plan et la dérive de couleur sont TOUJOURS actives, tout
+            // objectif se voit sur toute photo. Les disques de bokeh, eux,
+            // restent conditionnés aux scènes qui portent de vraies sources
+            // ponctuelles — et c'est un bonus, pas la condition de l'effet.
+            Text("Chaque objectif sépare le sujet du fond, teinte les couleurs et assombrit les coins — sur n'importe quelle photo. Les scènes à points lumineux (guirlandes, ville de nuit, contre-jour) y ajoutent en plus ses disques de bokeh.")
                 .font(Theme.Police.recit)
                 .lineSpacing(Theme.Interligne.recit)
                 .foregroundColor(Theme.Couleur.texteAttenue)
@@ -437,7 +418,7 @@ struct StudioView: View {
             }
 
             let reduite = await Task.detached(priority: .userInitiated) { () -> UIImage? in
-                MoteurStudio.imageReduite(donnees: donnees, coteMax: MoteurStudio.coteApercu)
+                MoteurOptique.imageReduite(donnees: donnees, coteMax: MoteurOptique.coteApercu)
             }.value
 
             donneesSource = donnees
@@ -473,10 +454,10 @@ struct StudioView: View {
                 try? await Task.sleep(nanoseconds: delaiNanosecondes)
             }
             if Task.isCancelled { return nil }
-            return MoteurStudio.rendre(donnees: donnees,
-                                       lens: choisi,
-                                       intensite: force,
-                                       coteMax: MoteurStudio.coteApercu)
+            return MoteurOptique.rendre(donnees: donnees,
+                                        lens: choisi,
+                                        intensite: force,
+                                        coteMax: MoteurOptique.coteApercu)
         }
         travailApercu = travail
 
@@ -508,7 +489,7 @@ struct StudioView: View {
             // jamais besoin de LIRE la photothèque (le sélecteur système
             // fournit l'image sans autorisation). Demander l'accès complet
             // pour écrire un fichier serait réclamer bien plus que nécessaire.
-            let statut = await MoteurStudio.autorisationAjout()
+            let statut = await Phototheque.autorisationAjout()
             guard statut == .authorized || statut == .limited else {
                 etatEnregistrement = .refuse
                 enregistrementEnCours = false
@@ -516,10 +497,10 @@ struct StudioView: View {
             }
 
             let jpeg = await Task.detached(priority: .userInitiated) { () -> Data? in
-                guard let image = MoteurStudio.rendre(donnees: donnees,
-                                                      lens: choisi,
-                                                      intensite: force,
-                                                      coteMax: MoteurStudio.coteExport)
+                guard let image = MoteurOptique.rendre(donnees: donnees,
+                                                       lens: choisi,
+                                                       intensite: force,
+                                                       coteMax: MoteurOptique.coteExport)
                 else { return nil }
                 // 0,92 : au-delà le fichier enfle sans gain visible, en deçà
                 // les dégradés doux des disques de bokeh se mettent à
@@ -533,7 +514,7 @@ struct StudioView: View {
                 return
             }
 
-            let succes = await MoteurStudio.ajouterALaPhototheque(jpeg: jpeg)
+            let succes = await Phototheque.ajouterALaPhototheque(jpeg: jpeg)
             etatEnregistrement = succes ? .reussi : .echec
             enregistrementEnCours = false
         }
@@ -658,463 +639,15 @@ private struct CurseurIntensite: View {
     }
 }
 
-// MARK: - Moteur de rendu
+// MARK: - Photothèque
 
-/// Le rendu photo, entièrement en Core Image.
+/// Les deux seules opérations système du studio.
 ///
-/// Pourquoi pas le shader Metal du catalogue : celui-ci DESSINE un champ de
-/// particules synthétiques, il ne transforme pas une image existante. Le
-/// principe « un seul shader » est tenu autrement, et plus honnêtement — les
-/// mêmes quatorze paramètres de `BokehParams` pilotent ici les mêmes traits
-/// visuels (bord adouci par `soft`, centre creusé par `ring`, liseré par
-/// `rim`, frange par `fringe`, aigrettes par `spike`, voile par `haze`), et
-/// les disques naissent des hautes lumières de la photo comme ils naissent des
-/// points lumineux de la scène.
-///
-/// Toutes les longueurs sont dérivées du plus grand côté de l'image. C'est ce
-/// qui garantit que l'aperçu à 1200 px et l'export à 3200 px sont la MÊME
-/// image à l'échelle près : l'ancienne app exprimait ses rayons en pixels, et
-/// l'export ne ressemblait pas à ce qui avait été validé à l'écran.
-private enum MoteurStudio {
-
-    /// Aperçu réduit : au-delà, chaque mouvement du curseur ferait attendre
-    /// l'utilisateur, ce qui revient à lui interdire d'explorer.
-    static let coteApercu: CGFloat = 1200
-    /// Export. 3200 px sur le plus grand côté suffit à un tirage A3 et garde
-    /// la morphologie (l'étape la plus coûteuse) dans des durées acceptables.
-    static let coteExport: CGFloat = 3200
-
-    // MARK: Préparation
-
-    /// Décode et réduit, en normalisant l'orientation.
-    ///
-    /// Le passage par `UIGraphicsImageRenderer` n'est pas un détour : c'est
-    /// `UIImage.draw(in:)` qui applique l'orientation EXIF. Un `CIImage(data:)`
-    /// direct livrerait les pixels bruts, et toutes les photos prises en
-    /// portrait sortiraient couchées — panne classique et parfaitement
-    /// silencieuse.
-    static func imageReduite(donnees: Data, coteMax: CGFloat) -> UIImage? {
-        guard let source = UIImage(data: donnees) else { return nil }
-
-        let largeurPixels = source.size.width * source.scale
-        let hauteurPixels = source.size.height * source.scale
-        let plusGrandCote = max(largeurPixels, hauteurPixels)
-        guard plusGrandCote > 0 else { return nil }
-
-        // Jamais d'agrandissement : interpoler une petite image ne créerait
-        // aucun détail et multiplierait le coût du filtrage.
-        let facteur = min(1, coteMax / plusGrandCote)
-        let cible = CGSize(width: max(1, (largeurPixels * facteur).rounded()),
-                           height: max(1, (hauteurPixels * facteur).rounded()))
-
-        let format = UIGraphicsImageRendererFormat.default()
-        // Échelle 1 : on raisonne en pixels, pas en points. Laisser l'échelle
-        // de l'écran multiplierait silencieusement la taille par 3 sur un
-        // iPhone Pro et ferait mentir `coteMax`.
-        format.scale = 1
-        // Opaque : une photo n'a pas de transparence, et un canal alpha inutile
-        // est une invitation de plus au piège du prémultiplié.
-        format.opaque = true
-
-        return UIGraphicsImageRenderer(size: cible, format: format).image { _ in
-            source.draw(in: CGRect(origin: .zero, size: cible))
-        }
-    }
-
-    /// Chaîne complète : décodage, réduction, effet optique, retour en `UIImage`.
-    /// Renvoie `nil` si la tâche a été annulée entre deux étapes — l'appelant
-    /// jette alors le résultat sans rien afficher.
-    static func rendre(donnees: Data, lens: Lens, intensite: Float, coteMax: CGFloat) -> UIImage? {
-        guard let reduite = imageReduite(donnees: donnees, coteMax: coteMax) else { return nil }
-        if Task.isCancelled { return nil }
-
-        guard let base = CIImage(image: reduite) else { return nil }
-        let cadre = base.extent
-        guard cadre.width > 0, cadre.height > 0 else { return nil }
-
-        let resultat = appliquer(lens: lens, intensite: intensite, sur: base, cadre: cadre)
-        if Task.isCancelled { return nil }
-
-        guard let cg = contexteImages.createCGImage(resultat, from: cadre) else { return nil }
-        return UIImage(cgImage: cg, scale: 1, orientation: .up)
-    }
-
-    // MARK: Graphe d'effets
-
-    private static func appliquer(lens: Lens,
-                                  intensite: Float,
-                                  sur base: CIImage,
-                                  cadre: CGRect) -> CIImage {
-
-        let k = min(max(intensite, 0), 1)
-        let p = lens.bokeh
-
-        // Sous 2 % d'intensité l'image renvoyée est la photo nue : recalculer
-        // une douzaine de filtres pour un résultat identique au pixel près
-        // serait du temps volé à l'utilisateur qui balaie le curseur.
-        if k < 0.02 { return base }
-
-        let grandCote = max(cadre.width, cadre.height)
-
-        // Rayon du cercle de confusion, en fraction du cadre. 1,8 % du grand
-        // côté à `size` = 1 : c'est le compromis entre « on ne voit rien »
-        // (le reproche fondateur) et une bouillie de taches. Le facteur
-        // (0,35 + 0,65·k) est EXACTEMENT celui du renderer du catalogue, pour
-        // que le curseur agisse pareil des deux côtés.
-        let rayon = grandCote * 0.018 * CGFloat(p.size) * CGFloat(0.35 + 0.65 * k)
-        // Plafond : au-delà, `CIMorphologyMaximum` devient très lent sans que
-        // l'image y gagne — les disques se recouvrent alors tous.
-        let rayonDisque = min(max(rayon, 2), 90)
-
-        // 1. HAUTES LUMIÈRES. Seuil bas (0,58) puis renormalisation : c'est le
-        // seul contenu de la photo sur lequel un objectif ancien se manifeste.
-        // Le reste de l'image ne doit surtout PAS être touché — flouter le
-        // sujet est ce qui donnait à l'ancienne app son air de filtre bon
-        // marché.
-        let seuil: CGFloat = 0.58
-        var hautes = base
-            .applyingFilter("CIColorControls", parameters: [
-                "inputBrightness": -seuil,
-                "inputSaturation": 1.2,
-                "inputContrast": 1.0
-            ])
-            .applyingFilter("CIColorClamp", parameters: [
-                "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
-            ])
-
-        // ENTOURAGE SOMBRE EXIGÉ — la protection qui manquait, et sans laquelle
-        // ce moteur répète le défaut le plus reproché à l'ancienne app :
-        // des anneaux dessinés sur les nuages, des liserés sur les murs clairs.
-        //
-        // Le seuil de luminance seul ne distingue pas un POINT de lumière d'une
-        // large SURFACE lumineuse : un ciel blanc le franchit tout entier, se
-        // fait dilater, et l'écran qui suit repeint le ciel par-dessus lui-même.
-        // Or un vrai objectif ne fabrique un disque de bokeh que pour une source
-        // ponctuelle — c'est-à-dire une source ENTOURÉE d'ombre.
-        //
-        // `CIMorphologyMinimum` érode : chaque pixel prend le minimum de son
-        // voisinage. Au centre d'une grande surface claire il reste clair ; à
-        // portée d'une zone sombre il s'effondre. L'inverse de cette érosion
-        // vaut donc « il y a du sombre alentour », et sert de laissez-passer.
-        // Le rayon suit celui du disque : c'est bien à l'échelle du bokeh à
-        // venir qu'il faut juger si la source est isolée.
-        let rayonEntourage = Float(min(90, max(3, rayonDisque * 0.75)))
-        let entourage = base
-            .clampedToExtent()
-            .applyingFilter("CIMorphologyMinimum", parameters: [
-                "inputRadius": rayonEntourage
-            ])
-            .cropped(to: cadre)
-            .applyingFilter("CIColorControls", parameters: [
-                "inputBrightness": 0, "inputSaturation": 0, "inputContrast": 1
-            ])
-        // Rampe douce plutôt que seuil net : une frontière franche se lirait
-        // elle-même comme un contour dans l'image.
-        let laissezPasser = entourage
-            .applyingFilter("CIColorMatrix", parameters: [
-                "inputRVector": CIVector(x: -2.2, y: 0, z: 0, w: 0),
-                "inputGVector": CIVector(x: -2.2, y: 0, z: 0, w: 0),
-                "inputBVector": CIVector(x: -2.2, y: 0, z: 0, w: 0),
-                "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
-                "inputBiasVector": CIVector(x: 1.0, y: 1.0, z: 1.0, w: 0)
-            ])
-            .applyingFilter("CIColorClamp", parameters: [
-                "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
-                "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
-            ])
-        // Multiplication et non addition : elle ne peut que RETIRER des points
-        // candidats, jamais en inventer, et l'alpha reste borné à 1.
-        hautes = hautes.applyingFilter("CIMultiplyCompositing", parameters: [
-            "inputBackgroundImage": laissezPasser
-        ])
-
-        // Renormalisation ET teinte de l'objectif en une seule matrice. La
-        // ligne alpha reste (0, 0, 0, 1) : c'est la règle non négociable de ce
-        // fichier, une matrice qui touche à l'alpha rouvre le bug de
-        // l'ancienne app.
-        let gain = 1 / (1 - Float(seuil))
-        let teinte = composantes(hex: lens.palette.first ?? lens.accent)
-        // Dosage : à faible intensité la teinte de l'objectif s'efface, à
-        // pleine intensité elle colore franchement les disques — c'est ce qui
-        // distingue un Helios vert-jaune d'un Noct-Nikkor bleuté.
-        let dose = 0.55 * k
-        hautes = hautes.applyingFilter("CIColorMatrix", parameters: [
-            "inputRVector": CIVector(x: CGFloat(gain * melange(1, teinte.0, dose)), y: 0, z: 0, w: 0),
-            "inputGVector": CIVector(x: 0, y: CGFloat(gain * melange(1, teinte.1, dose)), z: 0, w: 0),
-            "inputBVector": CIVector(x: 0, y: 0, z: CGFloat(gain * melange(1, teinte.2, dose)), w: 0),
-            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)
-        ])
-
-        // 2. DISQUES. La dilatation morphologique étale chaque point lumineux
-        // en un disque de rayon constant — c'est littéralement le cercle de
-        // confusion. Le flou de disque qui suit adoucit son bord : `soft`
-        // pilote la largeur de la transition, de 0,10 (bord franc du
-        // Summicron) à 0,72 (halo évanescent du Dream Lens).
-        let etale = hautes
-            .clampedToExtent()
-            .applyingFilter("CIMorphologyMaximum", parameters: [
-                "inputRadius": Float(rayonDisque)
-            ])
-        var couche = etale
-            .applyingFilter("CIDiscBlur", parameters: [
-                "inputRadius": Float(max(1, rayonDisque * CGFloat(0.10 + 0.55 * p.soft)))
-            ])
-            .cropped(to: cadre)
-
-        // 3. ANNEAU (bulles de savon). L'aberration sphérique non corrigée
-        // d'un triplet vide le centre du disque. On le reproduit par la
-        // DIFFÉRENCE entre le disque plein et un disque plus petit : là où les
-        // deux sont pleins (le centre) la différence s'annule, il ne reste que
-        // la couronne. `ring` ne dépend pas de l'intensité — une bulle de
-        // savon reste une bulle de savon, c'est un trait structurel.
-        if p.ring > 0.01 {
-            let interieur = hautes
-                .clampedToExtent()
-                .applyingFilter("CIMorphologyMaximum", parameters: [
-                    "inputRadius": Float(max(1, rayonDisque * 0.62))
-                ])
-                .applyingFilter("CIDiscBlur", parameters: [
-                    "inputRadius": Float(max(1, rayonDisque * 0.22))
-                ])
-                .cropped(to: cadre)
-
-            let anneau = couche.applyingFilter("CIDifferenceBlendMode", parameters: [
-                "inputBackgroundImage": interieur
-            ])
-            // Maximum et non addition : le maximum laisse l'alpha strictement
-            // intact (max(1, 1) = 1) là où l'addition le porterait à 2.
-            couche = mixerParMaximum(couche, poids: CGFloat(1 - p.ring),
-                                     avec: anneau, poids: CGFloat(p.ring),
-                                     cadre: cadre)
-        }
-
-        // 4. LISERÉ. L'aberration sphérique sous-corrigée concentre les rayons
-        // marginaux sur le pourtour. Même construction que l'anneau, mais avec
-        // un écart de rayon bien plus fin : c'est un trait, pas une couronne.
-        if p.rim > 0.02 {
-            let creux = couche
-                .clampedToExtent()
-                .applyingFilter("CIDiscBlur", parameters: [
-                    "inputRadius": Float(max(1, rayonDisque * 0.30))
-                ])
-                .cropped(to: cadre)
-            let lisere = couche.applyingFilter("CIDifferenceBlendMode", parameters: [
-                "inputBackgroundImage": creux
-            ])
-            couche = ecran(couche, avec: attenuer(lisere, facteur: CGFloat(p.rim * k)))
-        }
-
-        // 5. FRANGE CHROMATIQUE. Le même disque évalué à trois échelles : le
-        // rouge déborde, le bleu rentre, d'où le liseré magenta au dehors et
-        // cyan au dedans. `fringe` ne dépasse jamais 0,075 dans le catalogue —
-        // c'est subtil, et c'est voulu.
-        if p.fringe > 0.004 {
-            let ecart = CGFloat(p.fringe * k) * 0.09
-            let centre = CGPoint(x: cadre.midX, y: cadre.midY)
-            let rouge = canal(couche, rouge: 1, vert: 0, bleu: 0)
-                .transformed(by: echelleAutourDe(centre, facteur: 1 + ecart))
-                .cropped(to: cadre)
-            let bleu = canal(couche, rouge: 0, vert: 0, bleu: 1)
-                .transformed(by: echelleAutourDe(centre, facteur: 1 - ecart))
-                .cropped(to: cadre)
-            couche = ecran(ecran(couche, avec: rouge), avec: bleu)
-        }
-
-        // 6. AIGRETTES. Deux flous de mouvement croisés : la SOMME des deux
-        // bandes fait une croix, alors que leur produit ne laisserait que
-        // l'intersection, c'est-à-dire un point.
-        if p.spike > 0.02 {
-            let longueur = Float(rayonDisque * 2.2)
-            let horizontale = hautes.clampedToExtent()
-                .applyingFilter("CIMotionBlur", parameters: [
-                    "inputRadius": longueur, "inputAngle": Float(0)
-                ])
-                .cropped(to: cadre)
-            let verticale = hautes.clampedToExtent()
-                .applyingFilter("CIMotionBlur", parameters: [
-                    "inputRadius": longueur, "inputAngle": Float.pi / 2
-                ])
-                .cropped(to: cadre)
-            let croix = ecran(horizontale, avec: verticale)
-            couche = ecran(couche, avec: attenuer(croix, facteur: CGFloat(p.spike * k) * 0.8))
-        }
-
-        // 7. TOURBILLON. Un vortex appliqué au SEUL calque optique, screené
-        // par-dessus lui : les disques ne se déplacent pas, ils s'accompagnent
-        // d'une traînée en arc. Déplacer les disques eux-mêmes les décollerait
-        // de la lumière qui les a engendrés, et l'image deviendrait fausse au
-        // premier regard.
-        if p.swirl > 0.02 {
-            let tourbillon = couche
-                .clampedToExtent()
-                .applyingFilter("CIVortexDistortion", parameters: [
-                    "inputCenter": CIVector(x: cadre.midX, y: cadre.midY),
-                    "inputRadius": Float(grandCote * 0.95),
-                    "inputAngle": Float(p.swirl * k) * 0.42
-                ])
-                .cropped(to: cadre)
-            couche = ecran(couche, avec: attenuer(tourbillon, facteur: CGFloat(p.swirl * k) * 0.75))
-        }
-
-        // 8. VOILE DE DIFFUSION. La lumière parasite des verres anciens non
-        // traités : un halo LARGE et FAIBLE autour des hautes lumières. Ce
-        // n'est pas un flou — la netteté du sujet ne doit pas bouger d'un
-        // pixel, sans quoi on retombe sur le filtre bon marché.
-        if p.haze > 0.01 {
-            let voile = hautes
-                .clampedToExtent()
-                .applyingFilter("CIGaussianBlur", parameters: [
-                    "inputRadius": Float(max(2, rayonDisque * 2.4))
-                ])
-                .cropped(to: cadre)
-            couche = ecran(couche, avec: attenuer(voile, facteur: CGFloat(min(1, p.haze * 2.2 * k))))
-        }
-
-        // 9. ŒIL DE CHAT. Le vignettage mécanique du barillet tronque les
-        // disques périphériques. À l'échelle de l'image entière, cela se lit
-        // comme un affaiblissement progressif du bokeh vers les bords — et
-        // c'est appliqué au calque optique SEUL : assombrir la photo elle-même
-        // serait un effet de style que personne n'a demandé.
-        if p.cat > 0.02 {
-            couche = couche.applyingFilter("CIVignetteEffect", parameters: [
-                "inputCenter": CIVector(x: cadre.midX, y: cadre.midY),
-                "inputRadius": Float(grandCote * 0.48),
-                "inputIntensity": Float(p.cat * k) * 0.9,
-                "inputFalloff": Float(0.5)
-            ])
-        }
-
-        // 10. COMPOSITION. `CIScreenBlendMode` : il n'assombrit jamais et
-        // laisse l'alpha à 1 (1 + 1 − 1·1 = 1). L'addition, elle, porterait
-        // l'alpha à 2 et la composition suivante réinterpréterait le tout
-        // comme du prémultiplié — l'image sortirait noircie deux fois, ce qui
-        // est exactement la panne qui a coulé la version précédente.
-        let force = CGFloat(0.55 + 0.45 * k) * CGFloat(p.opacity)
-        var image = ecran(base, avec: attenuer(couche, facteur: force))
-
-        // 11. GRAIN. Réservé au rendu ciné de l'Angénieux (`grain` = 1 chez
-        // lui seul). En lumière douce plutôt qu'en incrustation : le grain
-        // doit texturer les demi-teintes sans écraser ni les noirs ni les
-        // hautes lumières.
-        if p.grain > 0.01, let bruit = CIFilter(name: "CIRandomGenerator")?.outputImage {
-            let amplitude = CGFloat(p.grain * k) * 0.32
-            let voileGrain = bruit
-                .cropped(to: cadre)
-                // Désaturation puis compression autour de 0,5 : un bruit
-                // coloré virerait la photo au bruit vidéo, et un bruit non
-                // recentré éclaircirait ou assombrirait toute l'image.
-                .applyingFilter("CIColorMatrix", parameters: [
-                    "inputRVector": CIVector(x: amplitude, y: amplitude, z: amplitude, w: 0),
-                    "inputGVector": CIVector(x: amplitude, y: amplitude, z: amplitude, w: 0),
-                    "inputBVector": CIVector(x: amplitude, y: amplitude, z: amplitude, w: 0),
-                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                    "inputBiasVector": CIVector(x: (1 - amplitude * 3) / 2,
-                                                y: (1 - amplitude * 3) / 2,
-                                                z: (1 - amplitude * 3) / 2,
-                                                w: 1)
-                ])
-            image = voileGrain.applyingFilter("CISoftLightBlendMode", parameters: [
-                "inputBackgroundImage": image
-            ])
-        }
-
-        // Recadrage final obligatoire : les flous et la dilatation ont agrandi
-        // l'étendue, et un `createCGImage` sur une étendue élargie livrerait
-        // une image plus grande que la photo, bordée de halo.
-        return image.cropped(to: cadre)
-    }
-
-    // MARK: Briques de composition
-
-    /// Superposition en écran. Le seul mode de mélange autorisé pour poser un
-    /// calque lumineux sur l'image : il n'assombrit jamais et laisse l'alpha
-    /// des deux calques à 1.
-    private static func ecran(_ fond: CIImage, avec calque: CIImage) -> CIImage {
-        calque.applyingFilter("CIScreenBlendMode", parameters: [
-            "inputBackgroundImage": fond
-        ])
-    }
-
-    /// Atténue un calque lumineux SANS toucher à son alpha.
-    private static func attenuer(_ image: CIImage, facteur: CGFloat) -> CIImage {
-        let f = min(max(facteur, 0), 4)
-        return image.applyingFilter("CIColorMatrix", parameters: [
-            "inputRVector": CIVector(x: f, y: 0, z: 0, w: 0),
-            "inputGVector": CIVector(x: 0, y: f, z: 0, w: 0),
-            "inputBVector": CIVector(x: 0, y: 0, z: f, w: 0),
-            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)
-        ])
-    }
-
-    /// Fondu entre deux calques lumineux par maximum pondéré.
-    ///
-    /// Un vrai fondu linéaire demanderait une addition, donc un alpha à 2. Le
-    /// maximum donne le même résultat aux deux extrémités (poids 0 ou 1) et,
-    /// entre les deux, une transition parfaitement acceptable sur des calques
-    /// qui ne contiennent que de la lumière.
-    private static func mixerParMaximum(_ a: CIImage, poids poidsA: CGFloat,
-                                        avec b: CIImage, poids poidsB: CGFloat,
-                                        cadre: CGRect) -> CIImage {
-        attenuer(b, facteur: poidsB)
-            .applyingFilter("CIMaximumCompositing", parameters: [
-                "inputBackgroundImage": attenuer(a, facteur: poidsA)
-            ])
-            .cropped(to: cadre)
-    }
-
-    /// Isole un canal, alpha inchangé. Sert à la frange chromatique.
-    private static func canal(_ image: CIImage, rouge: CGFloat, vert: CGFloat, bleu: CGFloat) -> CIImage {
-        image.applyingFilter("CIColorMatrix", parameters: [
-            "inputRVector": CIVector(x: rouge, y: 0, z: 0, w: 0),
-            "inputGVector": CIVector(x: 0, y: vert, z: 0, w: 0),
-            "inputBVector": CIVector(x: 0, y: 0, z: bleu, w: 0),
-            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)
-        ])
-    }
-
-    /// Homothétie autour d'un point. Une `CGAffineTransform(scaleX:y:)` nue
-    /// est centrée sur l'origine, en bas à gauche de l'image : appliquée
-    /// telle quelle, la frange dériverait en diagonale au lieu de s'ouvrir
-    /// symétriquement autour du centre du cadre.
-    private static func echelleAutourDe(_ centre: CGPoint, facteur: CGFloat) -> CGAffineTransform {
-        CGAffineTransform(translationX: centre.x, y: centre.y)
-            .scaledBy(x: facteur, y: facteur)
-            .translatedBy(x: -centre.x, y: -centre.y)
-    }
-
-    private static func melange(_ a: Float, _ b: Float, _ t: Float) -> Float {
-        a + (b - a) * t
-    }
-
-    /// Hex du catalogue → composantes sRGB.
-    ///
-    /// L'analyse est refaite ici plutôt qu'empruntée à `Color(hex:)` du
-    /// thème : celui-ci produit une `Color` SwiftUI, dont on ne peut pas
-    /// ressortir les composantes de façon fiable.
-    private static func composantes(hex: String) -> (Float, Float, Float) {
-        var texte = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        if texte.hasPrefix("#") { texte.removeFirst() }
-        if texte.count == 3 {
-            var doublee = ""
-            for caractere in texte {
-                doublee.append(caractere)
-                doublee.append(caractere)
-            }
-            texte = doublee
-        }
-        guard texte.count == 6, let valeur = UInt32(texte, radix: 16) else {
-            // Blanc plutôt que noir : une teinte de repli neutre laisse les
-            // disques visibles, un noir les éteindrait et passerait pour un
-            // bug de rendu.
-            return (1, 1, 1)
-        }
-        return (Float((valeur >> 16) & 0xFF) / 255,
-                Float((valeur >> 8) & 0xFF) / 255,
-                Float(valeur & 0xFF) / 255)
-    }
-
-    // MARK: Photothèque
+/// Elles vivent ici et non dans `MoteurOptique` à dessein : le moteur ne connaît
+/// que Core Image et doit rester appelable depuis le viseur caméra, qui n'a
+/// aucune raison de lier `Photos`. Écrire dans la photothèque relève de
+/// l'interface, pas du rendu.
+private enum Phototheque {
 
     /// Autorisation d'AJOUT seul. Le studio ne lit jamais la photothèque : le
     /// sélecteur système livre l'image sans la moindre autorisation. Demander
@@ -1132,10 +665,10 @@ private enum MoteurStudio {
 
     /// Écrit les octets JPEG tels quels dans la photothèque.
     ///
-    /// `addResource(with:data:options:)` plutôt qu'un `UIImage` : passer par
-    /// une image ferait réencoder le fichier par le système, avec ses propres
-    /// réglages de qualité — l'utilisateur n'obtiendrait pas les octets qu'on
-    /// a produits.
+    /// `addResource(with:data:options:)` plutôt qu'un `UIImage` : passer par une
+    /// image ferait réencoder le fichier par le système, avec ses propres
+    /// réglages de qualité — l'utilisateur n'obtiendrait pas les octets qu'on a
+    /// produits.
     static func ajouterALaPhototheque(jpeg: Data) async -> Bool {
         await withCheckedContinuation { (suite: CheckedContinuation<Bool, Never>) in
             PHPhotoLibrary.shared().performChanges {

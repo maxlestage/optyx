@@ -14,7 +14,7 @@ using namespace metal;
 //
 // PÉRIMÈTRE : ces fonctions servent aux scènes animées du CATALOGUE, et à
 // elles seules. Le studio part d'une photo, que ce shader ne sait pas prendre
-// en entrée : il la traite en Core Image (MoteurStudio, StudioView.swift). Ce
+// en entrée : il la traite en Core Image (MoteurOptique). Ce
 // qui fait converger les deux rendus n'est donc pas le code mais les
 // paramètres — les mêmes valeurs de BokehParams pilotent ici bokehProfile()
 // (soft, ring, rim, fringe, spike) et là-bas les filtres correspondants. Toute

@@ -187,7 +187,7 @@ private final class CoucheGPU {
 /// Ce qu'il ne fait pas, et qu'il ne faut pas lui prêter : le rendu du studio. Ce
 /// renderer DESSINE un champ de particules synthétiques sur du noir, il ne prend
 /// aucune image en entrée et n'a aucun moyen d'en transformer une. Le studio, lui,
-/// part d'une photo : il passe par Core Image (`MoteurStudio`, dans StudioView.swift).
+/// part d'une photo : il passe par Core Image (`MoteurOptique`, Studio/MoteurOptique.swift).
 /// Il y a donc bel et bien DEUX rendus, et prétendre le contraire en commentaire
 /// n'en ferait pas un seul.
 ///
