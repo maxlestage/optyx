@@ -103,6 +103,12 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// `accuserRetour()`.
     @Published var retourCapture: RetourCapture?
 
+    /// Un enregistrement vidéo est-il en cours ? Pilote le bouton et le
+    /// chronomètre.
+    @Published private(set) var enregistrementEnCours = false
+    /// Durée écoulée, en secondes entières.
+    @Published private(set) var secondesEnregistrees = 0
+
     // MARK: - Réglages optiques poussés par la vue
 
     /// Verrou des deux réglages ci-dessous.
@@ -163,6 +169,19 @@ final class ControleurCamera: NSObject, ObservableObject {
 
     private let session = AVCaptureSession()
     private let sortieVideo = AVCaptureVideoDataOutput()
+    private let sortieAudio = AVCaptureAudioDataOutput()
+    /// Le micro a-t-il pu être rattaché à la session ? Écrit à la construction,
+    /// lu au démarrage d'un enregistrement.
+    private var audioDisponible = false
+
+    /// Enregistreur courant, `fileVideo` uniquement. Non nil ⇔ enregistrement
+    /// en cours du point de vue du chemin des trames.
+    private var enregistreur: EnregistreurVideo?
+    /// Instant de la première trame écrite, pour le chronomètre affiché.
+    private var debutEnregistrement: CMTime?
+    /// Dernière seconde publiée. Évite trente sauts sur le fil principal par
+    /// seconde pour une valeur qui ne change qu'une fois.
+    private var secondesPubliees = -1
     private let sortiePhoto = AVCapturePhotoOutput()
 
     private let fileSession = DispatchQueue(label: "optyx.camera.session", qos: .userInitiated)
@@ -300,6 +319,12 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// `scenePhase == .background` : une session qui tourne dans un onglet
     /// invisible chauffe le téléphone pour rien.
     func arreter() {
+        // Un enregistrement en cours est CLOS, jamais abandonné : quitter
+        // l'onglet ou passer en arrière-plan doit sauver ce qui est déjà filmé.
+        // Le laisser tomber perdrait la prise et abandonnerait un .mov partiel
+        // dans le dossier temporaire.
+        if enregistrementEnCours { arreterEnregistrement() }
+
         fileSession.async { [weak self] in
             guard let self else { return }
             self.souhaiteMarcher = false
@@ -467,6 +492,28 @@ final class ControleurCamera: NSObject, ObservableObject {
             return false
         }
         session.addOutput(sortiePhoto)
+
+        // MICRO — facultatif, et c'est délibéré. L'accès micro est refusé bien
+        // plus souvent que l'accès caméra, et une app photo qui refuse de
+        // démarrer parce qu'elle n'a pas le son serait absurde. Sans micro, la
+        // vidéo s'enregistre muette ; l'utilisateur n'est jamais bloqué.
+        //
+        // On ne DEMANDE pas l'autorisation ici : la demander au lancement, avant
+        // que quiconque ait voulu filmer, est le meilleur moyen de se la faire
+        // refuser une fois pour toutes. Elle est demandée au premier
+        // enregistrement, dans `basculerEnregistrement()`.
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+           let micro = AVCaptureDevice.default(for: .audio),
+           let entreeMicro = try? AVCaptureDeviceInput(device: micro),
+           session.canAddInput(entreeMicro),
+           session.canAddOutput(sortieAudio) {
+            session.addInput(entreeMicro)
+            session.addOutput(sortieAudio)
+            sortieAudio.setSampleBufferDelegate(self, queue: fileVideo)
+            audioDisponible = true
+        } else {
+            audioDisponible = false
+        }
 
         session.commitConfiguration()
 
@@ -744,6 +791,124 @@ final class ControleurCamera: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Vidéo
+
+    /// Démarre ou arrête l'enregistrement. À appeler depuis le fil principal.
+    ///
+    /// Le micro est demandé ICI, au premier enregistrement, et non au lancement
+    /// de l'app : une autorisation réclamée avant que l'utilisateur ait montré
+    /// la moindre intention de filmer est celle qu'on se fait refuser, et un
+    /// refus est définitif jusqu'aux Réglages.
+    func basculerEnregistrement() {
+        if enregistrementEnCours {
+            arreterEnregistrement()
+            return
+        }
+
+        let statut = AVCaptureDevice.authorizationStatus(for: .audio)
+        if statut == .notDetermined {
+            AVCaptureDevice.requestAccess(for: .audio) { [weak self] accorde in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    // Le micro vient d'être accordé : il faut reconstruire la
+                    // session pour l'y rattacher, sinon la première vidéo
+                    // serait muette alors que l'utilisateur vient d'accepter.
+                    if accorde { self.reconstruirePourAudio() }
+                    self.demarrerEnregistrement()
+                }
+            }
+            return
+        }
+        demarrerEnregistrement()
+    }
+
+    /// Rattache le micro à une session déjà bâtie.
+    private func reconstruirePourAudio() {
+        fileSession.async { [weak self] in
+            guard let self, !self.audioDisponible else { return }
+            guard let micro = AVCaptureDevice.default(for: .audio),
+                  let entree = try? AVCaptureDeviceInput(device: micro) else { return }
+            self.session.beginConfiguration()
+            if self.session.canAddInput(entree), self.session.canAddOutput(self.sortieAudio) {
+                self.session.addInput(entree)
+                self.session.addOutput(self.sortieAudio)
+                self.sortieAudio.setSampleBufferDelegate(self, queue: self.fileVideo)
+                self.audioDisponible = true
+            }
+            self.session.commitConfiguration()
+        }
+    }
+
+    private func demarrerEnregistrement() {
+        let avecAudio = audioDisponible
+        fileVideo.async { [weak self] in
+            guard let self, self.enregistreur == nil else { return }
+            // La taille vient du dernier tampon rendu : c'est exactement celle
+            // des trames qui vont être écrites. La deviner autrement, depuis le
+            // preset ou l'écran, produirait un écrivain qui refuse chaque trame
+            // sans le dire.
+            let taille = self.tailleAnneau
+            guard taille.width >= 2, taille.height >= 2 else {
+                // Aucune trame n'a encore été rendue : l'anneau n'existe pas,
+                // donc on ignore la taille des images à écrire. Démarrer
+                // maintenant créerait un écrivain aux mauvaises dimensions, qui
+                // refuserait chaque trame en silence.
+                DispatchQueue.main.async { self.retourCapture = .echec }
+                return
+            }
+            self.enregistreur = EnregistreurVideo(taille: taille, cadence: 30, avecAudio: avecAudio)
+            self.debutEnregistrement = nil
+            self.secondesPubliees = -1
+            let demarre = self.enregistreur != nil
+            DispatchQueue.main.async {
+                self.secondesEnregistrees = 0
+                self.enregistrementEnCours = demarre
+                if !demarre { self.retourCapture = .echec }
+            }
+        }
+    }
+
+    private func arreterEnregistrement() {
+        fileVideo.async { [weak self] in
+            guard let self, let enregistreur = self.enregistreur else { return }
+            self.enregistreur = nil
+            self.debutEnregistrement = nil
+            enregistreur.terminer { [weak self] url in
+                guard let self else { return }
+                DispatchQueue.main.async { self.enregistrementEnCours = false }
+                guard let url else {
+                    DispatchQueue.main.async { self.retourCapture = .echec }
+                    return
+                }
+                self.enregistrerVideo(url)
+            }
+        }
+    }
+
+    /// Dépose le .mov dans la photothèque, puis efface le fichier temporaire —
+    /// une vidéo de plusieurs dizaines de mégaoctets laissée dans `tmp` finirait
+    /// par saturer l'espace de l'app.
+    private func enregistrerVideo(_ url: URL) {
+        let nettoyer = { try? FileManager.default.removeItem(at: url) }
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] statut in
+            guard let self else { return }
+            guard statut == .authorized || statut == .limited else {
+                nettoyer()
+                DispatchQueue.main.async { self.retourCapture = .refusePhototheque }
+                return
+            }
+            PHPhotoLibrary.shared().performChanges {
+                let requete = PHAssetCreationRequest.forAsset()
+                requete.addResource(with: .video, fileURL: url, options: nil)
+            } completionHandler: { succes, _ in
+                nettoyer()
+                DispatchQueue.main.async {
+                    self.retourCapture = succes ? .enregistree : .echec
+                }
+            }
+        }
+    }
+
     // MARK: - Incidents de session
 
     @objc private func sessionInterrompue(_ note: Notification) {
@@ -819,13 +984,25 @@ final class ControleurCamera: NSObject, ObservableObject {
 
 // MARK: - Trames du viseur
 
-extension ControleurCamera: AVCaptureVideoDataOutputSampleBufferDelegate {
+extension ControleurCamera: AVCaptureVideoDataOutputSampleBufferDelegate,
+                            AVCaptureAudioDataOutputSampleBufferDelegate {
 
     func captureOutput(_ output: AVCaptureOutput,
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
 
         // Tout ce corps s'exécute sur `fileVideo`, qui est SÉRIE.
+
+        // AUDIO — le micro et la caméra partagent ce délégué et cette file. On
+        // les sépare par l'identité de la sortie, et surtout PAS par le type de
+        // média du tampon : un échantillon audio n'a pas d'image, il
+        // ressortirait donc par le `guard` vidéo ci-dessous, silencieusement,
+        // et la vidéo serait muette sans qu'aucune erreur ne le signale.
+        if output === sortieAudio {
+            enregistreur?.ajouterAudio(sampleBuffer)
+            return
+        }
+
         if renduEnCours { return }
         renduEnCours = true
         defer { renduEnCours = false }
@@ -980,6 +1157,31 @@ extension ControleurCamera: AVCaptureVideoDataOutputSampleBufferDelegate {
                                             colorSpace: espaceViseur)
 
         emettre(CIImage(cvPixelBuffer: cible))
+
+        // ENREGISTREMENT — le MÊME tampon que celui qui vient d'être affiché.
+        // Aucun filtre n'est réexécuté : le fichier ne peut donc pas différer
+        // du viseur, et filmer ne coûte que l'encodage.
+        //
+        // L'horodatage vient du tampon d'origine, jamais d'une horloge lue ici :
+        // c'est lui qui porte la cadence réelle du capteur, y compris quand une
+        // trame a été jetée par `alwaysDiscardsLateVideoFrames`. Une horloge
+        // locale produirait une vidéo qui accélère dès que le rendu prend du
+        // retard.
+        if let enregistreur {
+            let instant = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            enregistreur.ajouterVideo(cible, a: instant)
+            if let debut = debutEnregistrement {
+                let ecoulees = Int(CMTimeGetSeconds(CMTimeSubtract(instant, debut)))
+                if ecoulees != secondesPubliees {
+                    secondesPubliees = ecoulees
+                    DispatchQueue.main.async { [weak self] in
+                        self?.secondesEnregistrees = max(0, ecoulees)
+                    }
+                }
+            } else {
+                debutEnregistrement = instant
+            }
+        }
 
         if !premiereTrameSignalee {
             premiereTrameSignalee = true
