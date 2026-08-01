@@ -122,7 +122,28 @@ final class ControleurCamera: NSObject, ObservableObject {
     @Published private(set) var histogramme: DonneesHistogramme = .vide
 
     /// Facteur de zoom courant, pour l'affichage. 1 = champ natif du grand-angle.
+    ///
+    /// C'est un facteur RAMENÉ AU GRAND-ANGLE, et non le `videoZoomFactor` brut
+    /// du périphérique. Sur un appareil virtuel à trois caméras, le facteur brut
+    /// vaut 1 pour l'ultra grand-angle : le grand-angle y est déjà à ×2, et
+    /// afficher ce 2 ferait mentir le viseur d'un facteur deux. Voir
+    /// `facteurGrandAngle`.
     @Published private(set) var zoom: CGFloat = 1
+
+    /// Focale courante, en millimètres pour un capteur 24×36.
+    ///
+    /// C'est la grandeur que l'utilisateur règle, et la seule qui ait le même
+    /// sens d'un modèle d'iPhone à l'autre : un facteur de zoom dépend de la
+    /// caméra qui le porte, une focale non.
+    @Published private(set) var focale: Double = 26
+
+    /// Bornes RÉELLEMENT atteignables par l'appareil courant, en millimètres.
+    ///
+    /// Publiée plutôt que constante parce qu'elle change à chaque bascule : la
+    /// frontale ne descend pas sous son propre champ et plafonne bien plus bas
+    /// que l'arrière. La commande de focale s'y ajuste au lieu de proposer une
+    /// course dont une partie ne ferait rien.
+    @Published private(set) var plageFocale: ClosedRange<Double> = 26...26
 
     /// Un enregistrement vidéo est-il en cours ? Pilote le bouton et le
     /// chronomètre.
@@ -215,6 +236,46 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// Appareil rattaché à la session. `fileSession` uniquement — c'est lui qui
     /// porte le zoom, et il change à chaque bascule.
     private var appareilCourant: AVCaptureDevice?
+
+    /// `videoZoomFactor` auquel l'appareil virtuel courant délivre le champ de
+    /// son GRAND-ANGLE, c'est-à-dire l'équivalent d'un 26 mm. `fileSession`
+    /// uniquement. Vaut 1 sur un périphérique simple.
+    ///
+    /// C'est la clé de tout cet étage. Sur un appareil virtuel, `videoZoomFactor`
+    /// = 1 désigne le champ du constituant le PLUS LARGE : l'ultra grand-angle
+    /// sur une triple caméra, le grand-angle sur une double télé. Le même nombre
+    /// ne désigne donc pas le même cadrage d'un modèle à l'autre, et c'est
+    /// exactement ce que reprochait le commentaire de `construireSession` à
+    /// l'ancienne recherche multi-types — reproche fondé, mais dont la
+    /// conclusion (« n'utiliser que le grand-angle ») fermait la moitié de la
+    /// plage. Rapporter chaque facteur à celui du grand-angle rend la focale
+    /// demandée indépendante du matériel, ce qui répond à l'objection sans
+    /// renoncer aux trois caméras.
+    private var facteurGrandAngle: CGFloat = 1
+
+    /// Focale demandée par l'utilisateur, en millimètres, et son verrou.
+    ///
+    /// Elle est écrite SYNCHRONEMENT par l'appelant et lue sur `fileSession`,
+    /// d'où le verrou — même raisonnement que `verrouReglages` pour `_lens`.
+    ///
+    /// Ce n'est pas de la prudence de principe : le curseur de focale émet à la
+    /// cadence du doigt, une soixantaine de fois par seconde, et chaque
+    /// application prend `lockForConfiguration` sur le périphérique. Empilées sur
+    /// une file SÉRIE, ces demandes se retarderaient les unes les autres et le
+    /// cadrage traînerait derrière le pouce. En lisant la valeur COURANTE au
+    /// moment de l'exécution plutôt que celle capturée à l'émission, chaque bloc
+    /// applique le dernier état connu ; les blocs en retard ne trouvent plus rien
+    /// à faire et sortent immédiatement.
+    ///
+    /// Conservée d'une bascule à l'autre pour que passer en frontale et revenir
+    /// ne réinitialise pas le cadrage.
+    private let verrouFocale = NSLock()
+    private var focaleDemandee: Double = 26
+
+    /// Dernière focale RÉELLEMENT posée sur le périphérique. `fileSession`
+    /// uniquement. Remise à `nil` à chaque bascule : le nouveau périphérique
+    /// repart de son propre facteur 1, donc rien n'y est encore posé.
+    private var focalePosee: Double?
 
     /// Copies protégées par `verrouReglages`, lues à chaque trame sur
     /// `fileVideo`. Les `@Published` correspondants appartiennent au fil
@@ -447,8 +508,14 @@ final class ControleurCamera: NSObject, ObservableObject {
                 self.frontale = (cible == .front)
                 // Le zoom est porté par le PÉRIPHÉRIQUE, pas par la session :
                 // il repart à 1 sur la caméra qu'on vient de rattacher, et le
-                // cadrage de l'objectif serait perdu à la première bascule.
-                self.appliquerZoom(pour: self.lens)
+                // cadrage serait perdu à la première bascule. On restitue la
+                // focale DEMANDÉE, et non celle de l'objectif : sinon un réglage
+                // manuel serait effacé par un aller-retour vers la frontale.
+                // `appliquerFocale` la reborne au matériel qui vient d'arriver.
+                self.verrouFocale.lock()
+                let focale = self.focaleDemandee
+                self.verrouFocale.unlock()
+                self.appliquerFocale(focale)
                 // Le miroir du viseur dépend de la position : il faut recalculer
                 // l'orientation capteur maintenant, pas au prochain pivotement.
                 self.appliquerOrientation()
@@ -510,18 +577,52 @@ final class ControleurCamera: NSObject, ObservableObject {
         for entree in session.inputs { session.removeInput(entree) }
         for sortie in session.outputs { session.removeOutput(sortie) }
 
-        // Un seul `deviceType`. L'ancienne app cherchait d'abord les caméras à
-        // profondeur (LiDAR, dual wide) ; sans carte de profondeur — et le moteur
-        // n'en demande aucune, son masque est radial — ce choix n'a plus de
-        // raison d'être, et il faisait varier le champ de vision d'un modèle
-        // d'iPhone à l'autre.
-        let recherche = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.builtInWideAngleCamera],
-            mediaType: .video,
-            position: position
-        )
+        // APPAREIL VIRTUEL D'ABORD, grand-angle seul en dernier recours.
+        //
+        // Ce fichier n'a longtemps ouvert que `.builtInWideAngleCamera`, au motif
+        // — juste — que les recherches multi-types faisaient varier le champ de
+        // vision d'un modèle d'iPhone à l'autre. Mais ce motif condamnait la
+        // moitié de la plage utile : le grand-angle seul couvre 26 mm à son
+        // facteur 1, il ne peut donc RIEN montrer de plus large, et tout ce qui
+        // est plus long qu'environ 78 mm n'est que du recadrage numérique.
+        //
+        // Or la fiche de l'Angénieux annonce « zoom 25–250 mm ». Les deux bouts
+        // de cette plage sont hors de portée du grand-angle seul : 25 mm demande
+        // l'ULTRA grand-angle, 250 mm demande le TÉLÉOBJECTIF. D'où l'appareil
+        // virtuel, qui réunit les trois caméras derrière une seule entrée et
+        // bascule de l'une à l'autre selon le facteur demandé, sans coupure de
+        // session ni reconfiguration.
+        //
+        // L'objection de variabilité est traitée ailleurs, par `facteurGrandAngle`
+        // : on ne demande jamais un facteur, on demande une FOCALE, et le facteur
+        // qui la réalise est recalculé pour le matériel présent. Le cadrage d'un
+        // 50 mm est donc le même sur un modèle à trois caméras et sur un modèle à
+        // une seule — sur ce dernier, une partie de la plage est simplement hors
+        // d'atteinte, ce que `plageFocale` déclare au lieu de le simuler.
+        //
+        // L'ordre compte : une `DiscoverySession` rend ses appareils dans l'ordre
+        // du SYSTÈME et non dans celui des types demandés, si bien qu'une
+        // recherche unique à quatre types ne garantit pas d'obtenir le plus riche.
+        // On interroge donc type par type et on s'arrête au premier trouvé.
+        let typesPreferes: [AVCaptureDevice.DeviceType] = [
+            .builtInTripleCamera,     // ultra grand-angle + grand-angle + télé
+            .builtInDualWideCamera,   // ultra grand-angle + grand-angle
+            .builtInDualCamera,       // grand-angle + télé
+            .builtInWideAngleCamera   // frontale, et modèles à une seule caméra
+        ]
+        // `position` est recopiée dans une locale AVANT la fermeture. Une
+        // séquence paresseuse RETIENT sa fermeture, qui est donc échappante :
+        // lire une propriété d'instance à l'intérieur exigerait un `self.`
+        // explicite et prolongerait la vie du contrôleur le temps de la
+        // recherche. La locale évite les deux.
+        let cible = position
+        let appareilTrouve = typesPreferes.lazy.compactMap { type in
+            AVCaptureDevice.DiscoverySession(deviceTypes: [type],
+                                             mediaType: .video,
+                                             position: cible).devices.first
+        }.first
 
-        guard let appareil = recherche.devices.first else {
+        guard let appareil = appareilTrouve else {
             session.commitConfiguration()
             return false
         }
@@ -533,6 +634,12 @@ final class ControleurCamera: NSObject, ObservableObject {
         }
         session.addInput(entree)
         appareilCourant = appareil
+        facteurGrandAngle = Self.facteurDuGrandAngle(de: appareil)
+        // Le périphérique qui arrive est à son propre facteur 1 : plus rien n'y
+        // est posé, et le garde-fou anti-répétition d'`appliquerFocale` doit
+        // pouvoir écrire même si la focale voulue n'a pas changé.
+        focalePosee = nil
+        publierPlageFocale(de: appareil)
 
         guard session.canAddOutput(sortieVideo) else {
             session.commitConfiguration()
@@ -896,7 +1003,82 @@ final class ControleurCamera: NSObject, ObservableObject {
 
     // MARK: - Zoom
 
-    /// Règle le zoom sur la focale RÉELLE de l'objectif.
+    /// Focale de référence du grand-angle d'un iPhone, en millimètres 24×36.
+    ///
+    /// C'est la seule constante qui relie le catalogue au matériel : une focale
+    /// de verre divisée par celle-ci donne le facteur de zoom qui la reproduit.
+    /// Elle vivait auparavant en dur dans `Lens.zoomEquivalent`, côté modèle ;
+    /// elle est ici parce que c'est une propriété de l'APPAREIL, pas du verre.
+    static let focaleGrandAngle: Double = 26
+
+    /// Plage NOMINALE de la commande de focale, en millimètres.
+    ///
+    /// C'est la plage de l'Angénieux — « zoom 25–250 mm » sur sa fiche —, le
+    /// seul zoom du catalogue et donc le seul verre dont la course est une
+    /// donnée du produit et non un choix d'interface. Les huit autres sont des
+    /// focales fixes ; la commande reste disponible chez eux, mais comme aide au
+    /// cadrage, la position de repos restant leur focale propre.
+    ///
+    /// La plage RÉELLEMENT offerte est l'intersection de celle-ci avec ce que le
+    /// matériel atteint (`plageFocale`) : sur un modèle sans téléobjectif le
+    /// haut de la course est du recadrage numérique au-delà d'un certain point,
+    /// et sur la frontale le bas est simplement absent.
+    static let plageFocaleNominale: ClosedRange<Double> = 25...250
+
+    /// `videoZoomFactor` auquel `appareil` délivre le champ de son grand-angle.
+    ///
+    /// Sur un appareil simple, 1. Sur un appareil virtuel, `constituentDevices`
+    /// est ordonné du plus large au plus long et
+    /// `virtualDeviceSwitchOverVideoZoomFactors` donne les facteurs de bascule —
+    /// un de moins que de constituants, celui d'indice i faisant passer du
+    /// constituant i au constituant i+1. Le facteur du constituant d'indice i est
+    /// donc la bascule d'indice i−1, et 1 pour le premier.
+    ///
+    /// Le repli à 1 couvre le cas — non documenté comme impossible — d'un
+    /// appareil virtuel sans grand-angle parmi ses constituants : la focale
+    /// demandée serait alors interprétée à l'échelle du constituant le plus
+    /// large, ce qui cadre trop serré, mais ne plante pas et reste borné.
+    private static func facteurDuGrandAngle(de appareil: AVCaptureDevice) -> CGFloat {
+        let constituants = appareil.constituentDevices
+        guard let index = constituants.firstIndex(where: {
+            $0.deviceType == .builtInWideAngleCamera
+        }) else { return 1 }
+        guard index > 0 else { return 1 }
+        let bascules = appareil.virtualDeviceSwitchOverVideoZoomFactors
+        guard index - 1 < bascules.count else { return 1 }
+        let facteur = CGFloat(truncating: bascules[index - 1])
+        return facteur > 0 ? facteur : 1
+    }
+
+    /// Facteur de zoom brut réalisant `focale` sur `appareil`, borné à ce que le
+    /// périphérique accepte.
+    ///
+    /// Dépasser `maxAvailableVideoZoomFactor` lève une exception Objective-C que
+    /// Swift ne rattrape pas : le bornage n'est pas une précaution de confort.
+    private func facteurBrut(pour focale: Double, sur appareil: AVCaptureDevice) -> CGFloat {
+        let brut = facteurGrandAngle * CGFloat(focale / Self.focaleGrandAngle)
+        return min(max(brut, appareil.minAvailableVideoZoomFactor),
+                   appareil.maxAvailableVideoZoomFactor)
+    }
+
+    /// Publie la plage de focales atteignable par `appareil`. `fileSession`.
+    private func publierPlageFocale(de appareil: AVCaptureDevice) {
+        let versFocale = { (facteur: CGFloat) -> Double in
+            Double(facteur / self.facteurGrandAngle) * Self.focaleGrandAngle
+        }
+        let bas = versFocale(appareil.minAvailableVideoZoomFactor)
+        let haut = versFocale(appareil.maxAvailableVideoZoomFactor)
+        // Intersection avec la plage nominale, puis garde-fou : si le matériel
+        // n'atteint rien de la plage annoncée — cas théorique d'une caméra très
+        // longue —, on rend sa propre plage plutôt qu'un intervalle vide, qui
+        // ferait planter la construction du `ClosedRange`.
+        let debut = max(bas, Self.plageFocaleNominale.lowerBound)
+        let fin = min(haut, Self.plageFocaleNominale.upperBound)
+        let plage = debut < fin ? debut...fin : bas...max(bas, haut)
+        DispatchQueue.main.async { self.plageFocale = plage }
+    }
+
+    /// Règle le cadrage sur la focale de repos de l'objectif.
     ///
     /// L'objectif principal d'un iPhone couvre l'équivalent d'un 26 mm. Un
     /// Trioplan 100 mm voit donc presque quatre fois plus serré (×3,85), un
@@ -904,18 +1086,33 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// ×2,23. Sans cela les neuf verres cadraient IDENTIQUE, ce qui est faux :
     /// la focale est la première chose qu'on perçoit d'un objectif, avant même
     /// son bokeh, et c'est ce qui manquait le plus après le rendu.
+    func appliquerZoom(pour lens: Lens) {
+        appliquerFocale(lens.focaleMM)
+    }
+
+    /// Règle le cadrage sur une focale ARBITRAIRE, en millimètres 24×36.
+    ///
+    /// C'est la seconde commande de zoom : la première suit l'objectif choisi,
+    /// celle-ci laisse balayer toute la plage à la main. Les deux écrivent le
+    /// même `videoZoomFactor` — il n'y a pas deux états de zoom qui pourraient
+    /// diverger, seulement deux façons de poser le même.
     ///
     /// `lockForConfiguration` dans un `do/catch`, jamais `try!` : le verrou
     /// échoue légitimement si une autre app tient le périphérique, et ce n'est
     /// pas une raison de faire tomber l'app — on garde alors le zoom précédent.
-    func appliquerZoom(pour lens: Lens) {
-        let demande = lens.zoomEquivalent
+    func appliquerFocale(_ focale: Double) {
+        verrouFocale.lock()
+        focaleDemandee = focale
+        verrouFocale.unlock()
         fileSession.async { [weak self] in
-            guard let self, let appareil = self.appareilCourant else { return }
-            // Borné au maximum RÉEL du périphérique : la frontale plafonne bien
-            // plus bas que l'arrière, et dépasser lève une exception
-            // Objective-C que Swift ne rattrape pas.
-            let effectif = min(max(demande, 1), appareil.maxAvailableVideoZoomFactor)
+            guard let self else { return }
+            // La valeur COURANTE, pas celle capturée : voir `focaleDemandee`.
+            self.verrouFocale.lock()
+            let voulue = self.focaleDemandee
+            self.verrouFocale.unlock()
+            guard self.focalePosee != voulue else { return }
+            guard let appareil = self.appareilCourant else { return }
+            let effectif = self.facteurBrut(pour: voulue, sur: appareil)
             do {
                 try appareil.lockForConfiguration()
                 appareil.videoZoomFactor = effectif
@@ -923,7 +1120,17 @@ final class ControleurCamera: NSObject, ObservableObject {
             } catch {
                 return
             }
-            DispatchQueue.main.async { self.zoom = effectif }
+            self.focalePosee = voulue
+            // Ce qu'on publie est ce qui a RÉELLEMENT été posé, après bornage,
+            // et non ce qui a été demandé : au-delà du maximum du périphérique
+            // l'affichage doit cesser de monter, sinon il annonce un cadrage que
+            // l'image ne montre pas — le défaut fondateur de cette app.
+            let rapport = effectif / self.facteurGrandAngle
+            let focaleReelle = Double(rapport) * Self.focaleGrandAngle
+            DispatchQueue.main.async {
+                self.zoom = rapport
+                self.focale = focaleReelle
+            }
         }
     }
 

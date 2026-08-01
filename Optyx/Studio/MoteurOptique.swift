@@ -1126,7 +1126,8 @@ enum MoteurOptique {
         // Ce terme peut être desserré sans rouvrir la famille des artefacts,
         // parce qu'il ne protège de RIEN à lui seul : ce sont T3 (chapeau
         // haut-de-forme, qui annule tout bord franc et toute grande surface) et
-        // T5 (allongement, qui annule les lamelles fines) qui font ce travail.
+        // T5 (anisotropie, qui annule toute structure allongée) qui font ce
+        // travail.
         // T1 ne fait que dire « c'est lumineux ».
         let t1 = rampe(luminance, bas: 0.72, haut: 0.98)
 
@@ -1238,11 +1239,18 @@ enum MoteurOptique {
         //
         // T4 avait été introduit pour fermer l'angle mort de T3 : les lamelles
         // de ciel entre les mèches de cheveux, qui produisaient un chapelet de
-        // faux points le long du contour d'un sujet. Mais T5 (allongement) a été
+        // faux points le long du contour d'un sujet. Mais T5 (anisotropie) a été
         // ajouté depuis, et il vise EXACTEMENT ces lamelles — une lamelle est
         // par définition allongée, une source ponctuelle non. Le garde-fou
         // spécifique existe donc maintenant, et T4 n'a plus à être le seul
         // rempart.
+        //
+        // RÉSERVE : ce raisonnement a été écrit alors que T5 était INVERSÉ et
+        // ne remplissait pas l'office qu'on lui prêtait ici (voir T5). Le
+        // desserrage de T4 à 0,82 a donc été décidé sur la foi d'un garde-fou
+        // qui n'en était pas un. Il l'est désormais ; si des disques
+        // apparaissaient encore dans des scènes trop claires, c'est cette borne
+        // qu'il faudrait resserrer en premier, et non rouvrir T5.
         //
         // Or T4 réglé à 0,62 éteignait l'étage dans toute pièce éclairée : une
         // ambiance locale d'intérieur tourne autour de 0,45-0,60, donc les
@@ -1251,49 +1259,116 @@ enum MoteurOptique {
         // 0,80 et au-delà) continue de les refuser.
         let t4 = rampe(ambiance, bas: 0.82, haut: 0.30)
 
-        // T5 — COMPACITÉ. Le critère qui manquait, et le seul qui ferme réellement
-        // l'angle mort de T3 décrit plus haut : une lamelle de ciel entre deux
-        // mèches est une structure ALLONGÉE, un disque de bokeh est COMPACT. Ni la
-        // luminance, ni l'entourage, ni l'ambiance ne distinguent les deux — seule
-        // la forme le fait.
+        // T5 — ANISOTROPIE. Le critère qui ferme l'angle mort de T3 décrit plus
+        // haut : une lamelle de ciel entre deux mèches, le liseré d'une étiquette,
+        // le bord éclairé d'une tomate sont des structures ALLONGÉES ; un disque de
+        // bokeh est COMPACT. Ni la luminance, ni l'entourage, ni l'ambiance ne
+        // distinguent les deux — seule la forme le fait.
         //
-        // L'ouverture par un SEGMENT horizontal supprime toute structure plus
-        // étroite que le segment dans la direction horizontale, et la laisse
-        // intacte si elle est plus large ; idem verticalement. On prend le MINIMUM
-        // des deux (`CIMinimumCompositing` : une intersection, bornée, jamais une
-        // addition — R1), puis la différence avec la luminance. Cette différence
-        // est grande sur une structure fine dans AU MOINS une direction, et nulle
-        // sur une tache compacte ou sur une grande plage claire. Les deux
-        // ouvertures sont ≤ luminance, donc la différence est encore une
-        // soustraction exacte (R4).
+        // CE TERME ÉTAIT INVERSÉ, et c'est la panne qui posait des anneaux le long
+        // des contours d'objets. Il mesurait `luminance − min(ouverture_H,
+        // ouverture_V)` et rejetait quand cette différence était grande. Or une
+        // ouverture par un segment supprime TOUTE structure plus étroite que lui —
+        // une lamelle fine, mais AUSSI une source ponctuelle, qui est fine dans les
+        // deux directions à la fois. La différence était donc grande sur les deux,
+        // et le terme rejetait exactement ce que l'étage existe pour trouver.
         //
-        // Longueur du segment : 0,6·rayonAnalyse arrondi au nombre IMPAIR
-        // supérieur, comme l'exige `CIMorphologyRectangle*`, soit 5 px sur la
-        // grille d'analyse normalisée à 900 px. Elle sépare mesurément :
-        //   lamelle de ciel de 3 px entre des cheveux à 0,10 → différence 0,89 →
-        //   T5 = 0,000 ; même lamelle au bord du ciel ouvert → 0,36 → 0,000 ;
-        //   ampoule de guirlande (cœur 2 px, σ=3) → 0,00 → 1,000 ; lampadaire →
-        //   1,000 ; grande plage claire → 1,000 (rejetée ailleurs, par T2 et T3).
-        // Sur la scène de plage complète, la couverture de la graine tombe de
-        // 1,0276 % à 0,0393 % — vingt-six fois moins de faux positifs le long du
-        // contour du sujet.
+        // Mesuré (grille 181×181, segment de 5 px, valeur du terme au centre de la
+        // structure) :
         //
-        // LIMITE ASSUMÉE : le segment étant axial, une lamelle DIAGONALE plus large
-        // que 5 px sur la grille d'analyse survit. `CIMorphologyRectangle*` ne sait
-        // pas faire d'élément structurant oblique ; l'alternative — quatre
-        // ouvertures de plus — ne tient pas dans le budget d'une trame de viseur.
-        let coteSegment = max(3, Int((rayonAnalyse * 0.6).rounded(.up)) | 1)
-        let compacite = ouvertureRectangle(luminance, largeur: coteSegment, hauteur: 1, cadre: cadre)
-            .applyingFilter("CIMinimumCompositing", parameters: [
-                "inputBackgroundImage": ouvertureRectangle(luminance,
-                                                           largeur: 1,
-                                                           hauteur: coteSegment,
-                                                           cadre: cadre)
-            ])
-        let allongement = luminance.applyingFilter("CIDifferenceBlendMode", parameters: [
-            "inputBackgroundImage": compacite
+        //     structure                    T5 mesuré      attendu
+        //     source ponctuelle σ = 1 px     0,000        1 (garder)
+        //     source ponctuelle σ = 2 px     0,000        1 (garder)
+        //     lamelle de 9 px horizontale    0,683        0 (rejeter)
+        //     grande plage claire            1,000        0 (rejeter)
+        //
+        // soit la polarité exactement retournée : zéro sur les vraies sources, forte
+        // amplitude sur les bandes larges et les aplats. Les desserrages successifs
+        // de T1 (0,88 → 0,80 → 0,72) et de T4 (0,42 → 0,62 → 0,82), motivés par
+        // « on ne voit aucun disque », compensaient ce blocage en ouvrant les autres
+        // termes — et ce qui passait alors était, mécaniquement, ce que T5 laissait
+        // passer : des contours.
+        //
+        // LA BONNE GRANDEUR EST L'ÉCART ENTRE DIRECTIONS, pas la perte d'une seule.
+        // Une structure allongée survit à l'ouverture SELON son axe et disparaît
+        // dans l'axe perpendiculaire : ses ouvertures directionnelles sont très
+        // dissemblables. Une structure compacte disparaît de la même façon dans
+        // toutes les directions, et une grande plage claire survit de la même façon
+        // dans toutes : dans les deux cas les ouvertures coïncident. L'anisotropie
+        // `max − min` vaut donc ≈ 0 sur une tache compacte QUELLE QUE SOIT SA
+        // TAILLE — elle mesure la forme, et rien que la forme, là où l'ancienne
+        // formule mélangeait forme et taille.
+        //
+        // `max ≥ min` par construction : la différence est exacte (R4). Maximum,
+        // minimum et différence sont tous bornés, aucune addition (R1).
+        //
+        // QUATRE DIRECTIONS ET NON DEUX. Avec les seules horizontale et verticale,
+        // une lamelle à 45° est coupée symétriquement par les deux segments : ses
+        // deux ouvertures coïncident, l'anisotropie tombe à zéro et la structure est
+        // prise pour un point. Mesuré, toujours au centre de la structure :
+        //
+        //     structure                    H,V seuls   + diagonales   attendu
+        //     lamelle 3 px à 45°             1,000         0,000      0 (rejeter)
+        //     lamelle 5 px à 45°             1,000         0,000      0 (rejeter)
+        //     lamelle 5 px à 30°             0,467         0,000      0 (rejeter)
+        //     contour courbe, épais. 3 px    1,000         0,000      0 (rejeter)
+        //     contour courbe, épais. 5 px    1,000         0,000      0 (rejeter)
+        //     source ponctuelle σ = 1 à 5    1,000         1,000      1 (garder)
+        //
+        // Les diagonales ne coûtent RIEN sur les vraies sources — argument de
+        // symétrie : sur une structure isotrope les quatre ouvertures rendent la
+        // même valeur, donc `max − min` reste nul. Elles ne retirent que ce que la
+        // paire axiale prenait à tort. C'est très exactement le défaut visible sur
+        // les captures : des anneaux qui suivent le bord des objets.
+        //
+        // `CIMorphologyRectangle*` ne sait pas faire d'élément structurant oblique ;
+        // on fait donc tourner l'IMAGE de 45° (voir `ouverturesDiagonales`). Une
+        // seule paire de rééchantillonnages sert les deux diagonales.
+        //
+        // LONGUEUR DU SEGMENT : `rayonAnalyse` arrondi au nombre IMPAIR supérieur,
+        // comme l'exige `CIMorphologyRectangle*`, soit 9 px sur la grille d'analyse
+        // normalisée à 900 px — contre 0,6·rayonAnalyse, soit 5 px, auparavant. Le
+        // segment vaut ainsi le RAYON DU DISQUE D'ANALYSE de T3 : les deux termes
+        // s'accordent sur ce qu'est « une petite structure ». Balayage mesuré, sur
+        // fond de scène 0,00 et 0,25 :
+        //
+        //     structure                    L=5     L=7     L=9     L=11
+        //     source ponctuelle σ = 1 à 5   1,000   1,000   1,000   1,000
+        //     lamelle 9 px horizontale      0,862   0,324   0,000   0,000
+        //     lamelle 9 px à 45°            0,881   0,359   0,000   0,000
+        //     contour courbe épais. 9 px    0,965   0,578   0,170   0,000
+        //     contour courbe épais. 3 px    0,000   0,000   0,192   0,490
+        //
+        // 9 est le seul réglage qui annule toutes les bandes jusqu'à sa propre
+        // longueur sans réveiller les contours fins : à 11, un contour courbe de
+        // 3 px se courbe assez sur la corde du segment pour qu'aucune direction ne
+        // le préserve, et il repasse pour compact. Les sources ponctuelles, elles,
+        // restent à 1,000 sur toute la plage — la longueur du segment ne les
+        // concerne pas, ce qui est la propriété même de cette formulation.
+        //
+        // LIMITE ASSUMÉE ET CHIFFRÉE : une bande de 13 px reste à 0,454 sur fond
+        // 0,25. Une telle bande dépasse le disque d'analyse de T3 (rayon 9 px) ;
+        // c'est à T3 de la traiter comme un aplat, pas à T5.
+        let coteSegment = max(3, Int(rayonAnalyse.rounded(.up)) | 1)
+        let (ouvertureD1, ouvertureD2) = ouverturesDiagonales(luminance,
+                                                              longueur: coteSegment,
+                                                              cadre: cadre)
+        let ouvertureH = ouvertureRectangle(luminance, largeur: coteSegment,
+                                            hauteur: 1, cadre: cadre)
+        let ouvertureV = ouvertureRectangle(luminance, largeur: 1,
+                                            hauteur: coteSegment, cadre: cadre)
+        let plusGrande = ouvertureH
+            .applyingFilter("CIMaximumCompositing", parameters: ["inputBackgroundImage": ouvertureV])
+            .applyingFilter("CIMaximumCompositing", parameters: ["inputBackgroundImage": ouvertureD1])
+            .applyingFilter("CIMaximumCompositing", parameters: ["inputBackgroundImage": ouvertureD2])
+        let plusPetite = ouvertureH
+            .applyingFilter("CIMinimumCompositing", parameters: ["inputBackgroundImage": ouvertureV])
+            .applyingFilter("CIMinimumCompositing", parameters: ["inputBackgroundImage": ouvertureD1])
+            .applyingFilter("CIMinimumCompositing", parameters: ["inputBackgroundImage": ouvertureD2])
+        let anisotropie = plusGrande.applyingFilter("CIDifferenceBlendMode", parameters: [
+            "inputBackgroundImage": plusPetite
         ])
-        let t5 = rampe(allongement, bas: 0.35, haut: 0.10)
+        let t5 = rampe(anisotropie, bas: 0.35, haut: 0.10)
 
         return t1
             .applyingFilter("CIMultiplyCompositing", parameters: ["inputBackgroundImage": t2])
@@ -1383,6 +1458,60 @@ enum MoteurOptique {
                 "inputHeight": Float(hauteur)
             ])
             .cropped(to: cadre)
+    }
+
+    /// Les deux ouvertures par un segment DIAGONAL de `longueur` pixels.
+    ///
+    /// `CIMorphologyRectangle*` ne connaît que des éléments structurants alignés
+    /// sur les axes. Plutôt que de renoncer aux diagonales, on fait tourner
+    /// l'IMAGE de 45° : les deux diagonales viennent sur les axes, les deux
+    /// ouvertures axiales s'y appliquent, et une rotation inverse remet tout en
+    /// place. Une seule paire de rééchantillonnages pour les deux directions.
+    ///
+    /// `clampedToExtent()` AVANT la rotation, et non après : une image d'étendue
+    /// finie tournée de 45° laisse quatre coins de noir transparent dans son
+    /// rectangle englobant, et l'érosion les propagerait à l'intérieur du cadre
+    /// sur toute la longueur du segment. Étendue par clamp, l'image est infinie
+    /// dans les deux repères et le problème n'existe pas. Core Image ne calcule
+    /// de toute façon que la région exigée par le recadrage final.
+    ///
+    /// La rotation se fait autour du CENTRE du cadre. N'importe quel centre
+    /// conviendrait — une rotation puis son inverse se composent en l'identité
+    /// quel que soit le point fixe —, mais le centre garde la région calculée
+    /// aussi petite que possible.
+    private static func ouverturesDiagonales(_ image: CIImage,
+                                             longueur: Int,
+                                             cadre: CGRect) -> (CIImage, CIImage) {
+        func autourDuCentre(_ angle: CGFloat) -> CGAffineTransform {
+            CGAffineTransform(translationX: cadre.midX, y: cadre.midY)
+                .rotated(by: angle)
+                .translatedBy(x: -cadre.midX, y: -cadre.midY)
+        }
+        let quart = CGFloat.pi / 4
+        let tournee = image.clampedToExtent().transformed(by: autourDuCentre(quart))
+
+        // Les ouvertures se font DANS le repère tourné, où les diagonales
+        // d'origine sont devenues les axes. Elles sont calculées sur l'étendue
+        // infinie, sans recadrage intermédiaire : recadrer ici sur `cadre` n'aurait
+        // aucun sens, ce rectangle ne décrivant plus la même région de l'image.
+        func ouvrir(largeur: Int, hauteur: Int) -> CIImage {
+            tournee
+                .applyingFilter("CIMorphologyRectangleMinimum", parameters: [
+                    "inputWidth": Float(largeur),
+                    "inputHeight": Float(hauteur)
+                ])
+                .clampedToExtent()
+                .applyingFilter("CIMorphologyRectangleMaximum", parameters: [
+                    "inputWidth": Float(largeur),
+                    "inputHeight": Float(hauteur)
+                ])
+                .clampedToExtent()
+                .transformed(by: autourDuCentre(-quart))
+                .cropped(to: cadre)
+        }
+
+        return (ouvrir(largeur: longueur, hauteur: 1),
+                ouvrir(largeur: 1, hauteur: longueur))
     }
 
     /// Garde-fou de COUVERTURE : la porte qui rend l'étage C auto-régulé.

@@ -141,21 +141,15 @@ struct Lens: Identifiable, Hashable {
         return Double(chiffres) ?? 50
     }
 
-    /// FACTEUR DE ZOOM qui donne à cet objectif son cadrage réel.
-    ///
-    /// L'objectif principal d'un iPhone couvre l'équivalent d'un 26 mm. Un
-    /// Trioplan 100 mm voit donc presque quatre fois plus serré, et un
-    /// Summicron 50 mm environ deux fois. Sans cette correspondance, les neuf
-    /// verres cadrent identique — ce qui est faux, et se remarque tout de
-    /// suite : la focale est la première chose qu'on perçoit d'un objectif,
-    /// avant même son bokeh.
-    ///
-    /// Borné à 1 par le bas : descendre sous 1 exigerait l'ultra grand-angle,
-    /// une caméra PHYSIQUEMENT différente, dont le champ, la distorsion et le
-    /// bruit ne correspondent à aucun des neuf verres.
-    var zoomEquivalent: CGFloat {
-        max(1, CGFloat(focaleMM / 26.0))
-    }
+    // `zoomEquivalent` a été retiré d'ici. Il rendait `max(1, focaleMM / 26)`,
+    // et sa borne basse à 1 énonçait que descendre sous 26 mm « exigerait
+    // l'ultra grand-angle, une caméra physiquement différente ». C'est vrai, et
+    // c'est désormais précisément ce que fait `ControleurCamera` : il ouvre un
+    // appareil VIRTUEL réunissant les trois caméras, et convertit une focale en
+    // facteur de zoom en tenant compte du matériel réellement présent. Le
+    // modèle n'a donc plus à connaître ni le 26 mm de l'iPhone ni les limites de
+    // son optique — il ne porte plus que `focaleMM`, la donnée du verre.
+
     let origin: String
     let era: String
     let story: String

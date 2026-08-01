@@ -57,6 +57,20 @@ struct VueCamera: View {
     /// la valeur part vers le contrôleur.
     @State private var intensite: Double = 0.8
 
+    /// Focale réglée à la main, en millimètres — `nil` tant que l'utilisateur
+    /// n'y a pas touché.
+    ///
+    /// L'OPTIONNEL EST LE FOND DU SUJET, pas une commodité. Il y a deux
+    /// commandes de zoom : le choix de l'objectif, qui pose sa focale de repos,
+    /// et ce curseur. Si la valeur manuelle était un `Double` ordinaire, il
+    /// faudrait décider à chaque changement d'objectif si elle prime ou non — et
+    /// les deux réponses sont mauvaises : la garder fige le cadrage d'un
+    /// Trioplan sur celui d'un Summicron, l'écraser interdit de comparer deux
+    /// verres au même cadrage. `nil` dit « je suis l'objectif », une valeur dit
+    /// « je suis réglé », et le changement d'objectif ne fait que revenir au
+    /// premier état.
+    @State private var focaleManuelle: Double?
+
     /// Vrai tant que l'onglet est à l'écran. Sans ce drapeau, un retour au
     /// premier plan relancerait la session même si l'utilisateur est entre-temps
     /// passé sur un autre onglet — la caméra chaufferait pour personne.
@@ -114,7 +128,13 @@ struct VueCamera: View {
         }
         .onChange(of: objectif) { _, nouvel in
             camera.regler(lens: nouvel, intensite: Float(intensite))
+            // Changer d'objectif ANNULE le réglage manuel : voir `focaleManuelle`.
+            focaleManuelle = nil
             camera.appliquerZoom(pour: nouvel)
+        }
+        .onChange(of: focaleManuelle) { _, nouvelle in
+            guard let nouvelle else { return }
+            camera.appliquerFocale(nouvelle)
         }
         .onChange(of: intensite) { _, nouvelle in
             // Aucun anti-rebond ici, contrairement au studio : le viseur ne
@@ -458,6 +478,7 @@ struct VueCamera: View {
         VStack(alignment: .leading, spacing: 0) {
             rangeeDePuces
             legendeObjectif
+            commandeFocale
             curseur
             noteRetour
             barreDeclencheurs
@@ -530,6 +551,53 @@ struct VueCamera: View {
         }
         .lineLimit(1)
         .padding(.horizontal, Theme.Espace.margeSection)
+    }
+
+    /// SECONDE COMMANDE DE ZOOM : la focale, réglée à la main sur toute la plage.
+    ///
+    /// La première commande est le choix de l'objectif, qui pose sa focale de
+    /// repos. Elle ne donne accès qu'à neuf valeurs, toutes comprises entre 35 et
+    /// 100 mm : ni le 25 mm ni le 250 mm de l'Angénieux — pourtant écrits sur sa
+    /// fiche — n'étaient atteignables, et les deux bouts de la plage n'existaient
+    /// tout simplement pas dans l'app.
+    ///
+    /// La valeur affichée vient du CONTRÔLEUR (`camera.focale`) et non de l'état
+    /// local : elle est donc bornée par ce que le périphérique a réellement posé.
+    /// Un curseur qui afficherait sa propre position annoncerait 250 mm sur un
+    /// modèle qui plafonne à 180 — exactement le viseur qui ment sur ce qu'on va
+    /// obtenir.
+    private var commandeFocale: some View {
+        HStack(spacing: 12) {
+            // Le libellé sert de bouton de retour à la focale de l'objectif.
+            // Pas d'icône supplémentaire : la barre du viseur est déjà chargée,
+            // et le geste se découvre en une fois.
+            Button {
+                focaleManuelle = nil
+                camera.appliquerZoom(pour: objectif)
+            } label: {
+                Text("FOCALE")
+                    .font(Theme.Police.meta)
+                    .tracking(Theme.Tracking.meta)
+                    .foregroundColor(focaleManuelle == nil
+                                     ? Theme.Couleur.texteAttenue
+                                     : Color(hex: objectif.accent))
+                    .fixedSize()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Revenir à la focale de l'objectif")
+
+            CurseurFocaleViseur(focale: $focaleManuelle,
+                                repos: objectif.focaleMM,
+                                plage: camera.plageFocale)
+
+            Text("\(Int(camera.focale.rounded())) mm")
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundColor(Theme.Couleur.texte)
+                .frame(width: 52, alignment: .trailing)
+                .fixedSize()
+        }
+        .padding(.horizontal, Theme.Espace.margeSection)
+        .padding(.top, 10)
     }
 
     private var curseur: some View {
@@ -831,6 +899,125 @@ private struct PuceObjectifViseur: View {
 /// Jumeau du curseur du studio, sans la pastille de pourcentage : sur un viseur
 /// plein cadre, chaque point pris au bas de l'écran est du cadrage en moins. La
 /// valeur reste annoncée à VoiceOver.
+/// Curseur de focale, gradué en millimètres, à course LOGARITHMIQUE.
+///
+/// L'échelle logarithmique n'est pas un raffinement : la focale se perçoit en
+/// RAPPORTS, pas en écarts. Passer de 25 à 50 mm divise le champ par deux, passer
+/// de 225 à 250 le réduit de 11 %. Sur une course linéaire de 25 à 250, la moitié
+/// basse — celle où se joue tout le cadrage courant, 25 à 137 mm — tiendrait dans
+/// la moitié du rail, et les neuf dixièmes de la course serviraient à départager
+/// des téléobjectifs voisins. En logarithmique, chaque doublement de focale occupe
+/// la même longueur : 25→50, 50→100, 100→200 sont trois segments égaux.
+///
+/// Le pouce se pose donc au tiers pour un 50 mm plutôt qu'au dixième.
+private struct CurseurFocaleViseur: View {
+
+    /// `nil` = la focale suit l'objectif. Le curseur se place alors sur `repos`
+    /// mais n'écrit rien tant qu'on ne le touche pas.
+    @Binding var focale: Double?
+
+    /// Focale de repos de l'objectif courant, en millimètres.
+    let repos: Double
+
+    /// Bornes réellement atteignables par le périphérique.
+    let plage: ClosedRange<Double>
+
+    @Environment(\.accentObjectif) private var accent
+
+    /// Repères gravés sur le rail. Les focales classiques du 24×36, celles qu'un
+    /// photographe reconnaît sans les lire : grand-angle, normal, portrait,
+    /// téléobjectifs. Celles qui tombent hors de la plage du périphérique sont
+    /// simplement omises.
+    private static let reperes: [Double] = [25, 35, 50, 85, 135, 200, 250]
+
+    /// Position dans [0, 1] d'une focale sur la course logarithmique.
+    private func fraction(_ mm: Double) -> CGFloat {
+        let bas = plage.lowerBound
+        let haut = plage.upperBound
+        // Une plage dégénérée (périphérique à focale unique) donnerait un
+        // logarithme nul au dénominateur : le pouce se pose alors à gauche et le
+        // rail ne répond plus, ce qui est la traduction exacte de « rien à
+        // régler ».
+        guard haut > bas, bas > 0 else { return 0 }
+        let position = log(min(max(mm, bas), haut) / bas) / log(haut / bas)
+        return CGFloat(position)
+    }
+
+    /// L'inverse : la focale d'une position du pouce.
+    ///
+    /// Nommée `focalePour` et non `focale` : une méthode et une propriété
+    /// stockée de même nom sont une redéclaration invalide en Swift, et le
+    /// diagnostic ne pointe pas la ligne fautive.
+    private func focalePour(_ fraction: CGFloat) -> Double {
+        let bas = plage.lowerBound
+        let haut = plage.upperBound
+        guard haut > bas, bas > 0 else { return bas }
+        let f = Double(min(max(fraction, 0), 1))
+        return bas * pow(haut / bas, f)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let pouce = Theme.Espace.diametrePouceCurseur
+            let course = max(geo.size.width - pouce, 1)
+            let courante = focale ?? repos
+            let centre = pouce / 2 + course * fraction(courante)
+
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Theme.Couleur.rail)
+                    .frame(height: Theme.Espace.hauteurRailCurseur)
+
+                // Repères, sous le pouce et au-dessus du rail.
+                ForEach(Self.reperes.filter { plage.contains($0) }, id: \.self) { mm in
+                    Capsule()
+                        .fill(Theme.Couleur.texte.opacity(0.38))
+                        .frame(width: 1.5, height: Theme.Espace.hauteurRailCurseur * 2.2)
+                        .offset(x: pouce / 2 + course * fraction(mm) - 0.75)
+                }
+
+                Capsule()
+                    .fill(Theme.Fond.degradeTrait(accent: accent))
+                    .frame(width: centre, height: Theme.Espace.hauteurRailCurseur)
+
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: pouce, height: pouce)
+                    .shadow(color: Theme.Ombre.couleurPouceCurseur,
+                            radius: Theme.Ombre.rayonPouceCurseur,
+                            x: 0,
+                            y: Theme.Ombre.decalagePouceCurseur)
+                    .offset(x: centre - pouce / 2)
+            }
+            .frame(height: pouce)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { geste in
+                        let brut = (geste.location.x - pouce / 2) / course
+                        focale = focalePour(brut)
+                    }
+            )
+        }
+        .frame(height: Theme.Espace.diametrePouceCurseur)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Focale")
+        .accessibilityValue("\(Int((focale ?? repos).rounded())) millimètres")
+        .accessibilityAdjustableAction { direction in
+            // Pas d'incrément fixe en millimètres : un pas de 5 mm est énorme à
+            // 25 et dérisoire à 250. Un pas MULTIPLICATIF de 6 % donne partout la
+            // même variation de champ, soit une quarantaine de crans sur toute la
+            // course.
+            let courante = focale ?? repos
+            switch direction {
+            case .increment: focale = min(plage.upperBound, courante * 1.06)
+            case .decrement: focale = max(plage.lowerBound, courante / 1.06)
+            @unknown default: break
+            }
+        }
+    }
+}
+
 private struct CurseurIntensiteViseur: View {
 
     @Binding var valeur: Double
