@@ -286,7 +286,7 @@ enum MoteurOptique {
         let gV = 1 + (sig.gainV - 1) * k
         let gB = 1 + (sig.gainB - 1) * k
 
-        let teintee = base
+        var teintee = base
             .applyingFilter("CIColorMatrix", parameters: [
                 "inputRVector": CIVector(x: gR, y: 0, z: 0, w: 0),
                 "inputGVector": CIVector(x: 0, y: gV, z: 0, w: 0),
@@ -302,6 +302,39 @@ enum MoteurOptique {
                 "inputContrast": Float(1 + (sig.contraste - 1) * k),
                 "inputBrightness": Float(0)
             ])
+
+        // ─────────────────────────────────────────────────────────────────────
+        // A1 bis. MICRO-CONTRASTE — la signature des verres PRÉCIS.
+        //
+        // C'est le seul étage qui AFFIRME au lieu de dégrader, et son absence
+        // laissait le Summicron et le Noct-Nikkor sans aucune signature propre :
+        // un moteur qui ne sait qu'ajouter des défauts n'a rien à donner à deux
+        // verres dont toute la réputation tient au piqué. Leur rendu était
+        // l'image nue, teintée et vignettée — d'où « certains objectifs ne font
+        // rien ».
+        //
+        // Placé AVANT la défocalisation : la zone nette en profite, et
+        // l'arrière-plan, flouté juste après, n'en garde rien. Accentuer ce
+        // qu'on s'apprête à effacer serait du calcul perdu.
+        //
+        // `CISharpenLuminance` et non `CIUnsharpMask` : le premier ne touche que
+        // la luminance, le second accentue aussi la chrominance et fabrique des
+        // franges colorées sur les bords francs — exactement la famille
+        // d'artefacts que ce moteur a mis plusieurs itérations à éliminer.
+        //
+        // Le rayon suit le cadre (R3) : à 0,004 du grand côté il vaut 3,6 px au
+        // viseur et 12,8 px à l'export, donc la même accentuation RELATIVE dans
+        // les deux — un rayon en pixels absolus donnerait un fichier exporté
+        // visiblement moins net que le viseur qui l'a promis.
+        if sig.microContraste > 0.01 {
+            teintee = teintee
+                .clampedToExtent()
+                .applyingFilter("CISharpenLuminance", parameters: [
+                    "inputSharpness": Float(sig.microContraste * k * 1.4),
+                    "inputRadius": Float(max(1.2, grandCote * 0.004))
+                ])
+                .cropped(to: cadre)
+        }
 
         // ─────────────────────────────────────────────────────────────────────
         // B1. DÉFOCALISATION DE L'ARRIÈRE-PLAN.
@@ -408,7 +441,25 @@ enum MoteurOptique {
         //     par 3,56 et les ratios sont inchangés. Un tourbillon se lit au
         //     mouvement du fond, pas à l'amplitude de la rotation.
         // ─────────────────────────────────────────────────────────────────────
-        let angleTourbillon = CGFloat(p.swirl) * k * (2 * rayonFlouRelatif / 0.1875)
+        //
+        // (3) LA CONTRAINTE « DEUX LARGEURS DE FLOU » ÉTAIT TROP PRUDENTE, et
+        //     elle rendait le tourbillon invisible — 15,8 px de déplacement au
+        //     viseur pour l'Helios, dont c'est pourtant LA signature, celle qui
+        //     lui vaut sa réputation et qui figure en toutes lettres sur sa
+        //     fiche (« L'arrière-plan tournoie. Littéralement. »).
+        //
+        //     Elle visait à empêcher le dédoublement des contours. Or ce risque
+        //     n'existe pas ici : la torsion s'applique à `flou`, la copie DÉJÀ
+        //     défocalisée, et se remélange sur `flou` lui-même. Les deux côtés
+        //     du fondu sont donc flous — un fondu entre deux images floues ne
+        //     peut produire aucun contour net, quelle que soit l'amplitude. Le
+        //     dédoublement d'origine venait d'un tout autre montage : le
+        //     tourbillon était alors superposé à l'image NETTE.
+        //
+        //     Le déplacement maximal est donc porté à 5,5 % du grand côté, soit
+        //     49,5 px au viseur et 176 px à l'export pour l'Helios. C'est un
+        //     mouvement franc du fond, qui se lit immédiatement.
+        let angleTourbillon = CGFloat(p.swirl) * k * (0.055 / 0.1875)
 
         if p.swirl > 0.02,
            let masqueTourbillon = masqueCadre(cadre: cadre, debut: 0.70, fin: 0.95) {
