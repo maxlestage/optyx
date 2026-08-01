@@ -611,7 +611,17 @@ enum MoteurOptique {
             ])
 
             fond = ecran(fond, avec: attenuer(voile,
-                                              facteur: min(0.5, CGFloat(p.haze) * k * 3.0)))
+                                              // Plafond 0,50 → 0,80 et coefficient
+                                              // 3,0 → 4,5. Le voile onirique EST la
+                                              // signature du Dream Lens (haze 0,30,
+                                              // la plus forte du catalogue) : sa
+                                              // fiche vend « un monde qui devient un
+                                              // rêve », et l'ancien plafond le
+                                              // ramenait au même niveau que le
+                                              // Takumar. Le plafond ne mord
+                                              // désormais que sur lui, ce qui
+                                              // préserve l'ordre des neuf verres.
+                                              facteur: min(0.8, CGFloat(p.haze) * k * 4.5)))
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -684,7 +694,16 @@ enum MoteurOptique {
             // quelques pour cent, pas un calque opaque. Le réglage précédent, 0,14,
             // donnait 0,96 / 1,07 / 0,60 % : lisible, mais tout juste au-dessus du
             // bruit de quantification une fois le fichier réduit à l'écran.
-            let oscillation = CGFloat(p.grain) * k * 0.24
+            // 0,24 était TROP : sur appareil, l'Angénieux couvrait l'image d'un
+            // moucheté blanc qui se lit comme du bruit de capteur, pas comme du
+            // grain argentique. La différence entre les deux n'est pas
+            // l'amplitude seule mais le rapport amplitude/taille de cellule :
+            // depuis que la cellule suit la résolution (elle mesure 0,1 % du
+            // grand côté au lieu d'un pixel), chaque grain est ~3,6 fois plus
+            // large qu'avant à l'export, donc bien plus visible à amplitude
+            // égale. 0,14 rend un voile dans [0,43 ; 0,57] : une texture qui se
+            // voit franchement sans envahir l'image.
+            let oscillation = CGFloat(p.grain) * k * 0.14
             // Un tiers par canal, puisque les trois sont sommés : c'est ce
             // facteur 3 qui manquait.
             let parCanal = oscillation / 3
@@ -929,7 +948,20 @@ enum MoteurOptique {
         // ≈ 0,75, écume ≈ 0,90, t-shirt blanc ≈ 0,97, spéculaire ponctuel ≈ 1,00
         // (écrêté). La borne haute à 0,99 plutôt que 1,00 laisse une rampe de
         // largeur non nulle : un seuil franc se lirait lui-même comme un contour.
-        let t1 = rampe(luminance, bas: 0.88, haut: 0.99)
+        // DESSERRAGE ASSUMÉ : 0,88 → 0,80. À 0,88, seules les sources
+        // franchement écrêtées passaient, c'est-à-dire un lampadaire la nuit et
+        // à peu près rien d'autre. Les bulles du Trioplan et les aigrettes du
+        // Noct-Nikkor — leurs signatures respectives, celles que leur fiche
+        // promet — n'apparaissaient donc quasiment jamais dans une scène
+        // ordinaire. À 0,80, un reflet de fenêtre, un chrome, une lampe
+        // allumée ou un éclat sur l'eau franchissent le seuil.
+        //
+        // Ce terme peut être desserré sans rouvrir la famille des artefacts,
+        // parce qu'il ne protège de RIEN à lui seul : ce sont T3 (chapeau
+        // haut-de-forme, qui annule tout bord franc et toute grande surface) et
+        // T5 (allongement, qui annule les lamelles fines) qui font ce travail.
+        // T1 ne fait que dire « c'est lumineux ».
+        let t1 = rampe(luminance, bas: 0.80, haut: 0.99)
 
         // T2 — ENTOURAGE SOMBRE. Rampe DÉCROISSANTE sur l'érosion : au centre
         // d'une grande surface claire le minimum local reste clair, à portée
@@ -1035,7 +1067,22 @@ enum MoteurOptique {
                 "inputRadius": Float(max(8, grandCote * 0.05))
             ])
             .cropped(to: cadre)
-        let t4 = rampe(ambiance, bas: 0.62, haut: 0.20)
+        // DESSERRAGE ASSUMÉ : 0,62 → 0,75 en borne basse, 0,20 → 0,28 en haute.
+        //
+        // T4 avait été introduit pour fermer l'angle mort de T3 : les lamelles
+        // de ciel entre les mèches de cheveux, qui produisaient un chapelet de
+        // faux points le long du contour d'un sujet. Mais T5 (allongement) a été
+        // ajouté depuis, et il vise EXACTEMENT ces lamelles — une lamelle est
+        // par définition allongée, une source ponctuelle non. Le garde-fou
+        // spécifique existe donc maintenant, et T4 n'a plus à être le seul
+        // rempart.
+        //
+        // Or T4 réglé à 0,62 éteignait l'étage dans toute pièce éclairée : une
+        // ambiance locale d'intérieur tourne autour de 0,45-0,60, donc les
+        // disques ne pouvaient apparaître qu'à la tombée de la nuit. À 0,75, un
+        // salon éclairé les laisse passer, une plage en plein soleil (ambiance
+        // 0,80 et au-delà) continue de les refuser.
+        let t4 = rampe(ambiance, bas: 0.75, haut: 0.28)
 
         // T5 — COMPACITÉ. Le critère qui manquait, et le seul qui ferme réellement
         // l'angle mort de T3 décrit plus haut : une lamelle de ciel entre deux
