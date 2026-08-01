@@ -377,7 +377,7 @@ enum MoteurOptique {
         // 31 % du maximum. Un départ à 0 rendrait la moitié basse du curseur
         // inutile.
         // ─────────────────────────────────────────────────────────────────────
-        let rayonFlouRelatif = min(max(0.058 * CGFloat(p.size) * (0.30 + 0.70 * k), 0.0025), 0.110)
+        let rayonFlouRelatif = min(max(0.016 * CGFloat(p.size) * (0.30 + 0.70 * k), 0.0025), 0.030)
 
         var flou = teintee
             .clampedToExtent()
@@ -476,20 +476,79 @@ enum MoteurOptique {
         //     Le déplacement maximal est donc porté à 5,5 % du grand côté, soit
         //     49,5 px au viseur et 176 px à l'export pour l'Helios. C'est un
         //     mouvement franc du fond, qui se lit immédiatement.
-        let angleTourbillon = CGFloat(p.swirl) * k * (0.205 / 0.1875)
+        let angleTourbillon = CGFloat(p.swirl) * k * (0.070 / 0.1875)
 
         if p.swirl > 0.02,
            let masqueTourbillon = masqueCadre(cadre: cadre, debut: 0.70, fin: 0.95) {
-            let tordu = flou
+
+            // ─────────────────────────────────────────────────────────────────
+            // FILÉ TANGENTIEL, et non plus une simple torsion.
+            //
+            // C'EST LE POINT QUI MANQUAIT. `CIVortexDistortion` DÉPLACE les
+            // pixels, il ne les ÉTIRE pas : l'arrière-plan se retrouve pivoté,
+            // mais rien n'y tourbillonne. Or ce qu'on voit sur un vrai Helios,
+            // ce n'est pas un fond tourné — c'est un fond ÉTIRÉ EN ARCS, chaque
+            // point de lumière tiré le long du cercle qui le porte. Une rotation
+            // sans filé est invisible sur une scène quelconque, parce qu'aucun
+            // repère ne dit d'où le pixel vient.
+            //
+            // Le filé s'obtient en MOYENNANT plusieurs torsions d'angles
+            // croissants : chaque point apparaît alors à toutes les positions
+            // intermédiaires de son arc, ce qui est exactement la définition
+            // d'un flou de mouvement circulaire. Quatre échantillons suffisent
+            // — la copie est déjà défocalisée, ses détails fins ont disparu, et
+            // les bandes qu'un sous-échantillonnage produirait sur une image
+            // nette n'ont ici rien pour se former.
+            //
+            // MOYENNE PAR FONDUS SUCCESSIFS, jamais par addition. Additionner
+            // quatre images d'alpha 1 porterait l'alpha à 4, et le rendu
+            // prémultiplié diviserait les couleurs d'autant — c'est le bug qui a
+            // noirci l'image deux fois dans les versions précédentes. Les poids
+            // 1/2, 1/3, 1/4 donnent une moyenne EXACTE des quatre copies :
+            // après la n-ième étape, chaque copie pèse 1/n.
+            // NOMBRE D'ÉCHANTILLONS CALCULÉ, jamais posé en dur. Pour qu'un
+            // filé soit CONTINU, deux copies successives doivent se recouvrir :
+            // leur écart doit rester sous le rayon de flou de la copie. Sinon on
+            // ne voit pas une traînée mais des FANTÔMES distincts — quatre
+            // copies sur un arc de 60° les espacent de 110 px, ce qui est
+            // exactement l'artefact de dédoublement que ce moteur a mis
+            // plusieurs itérations à éliminer.
+            //
+            // Le déplacement maximal vaut angle·R/4 (le profil de
+            // `CIVortexDistortion` décroît linéairement, son maximum est à
+            // R/2). On demande donc autant d'échantillons qu'il faut pour que
+            // l'écart tombe sous le rayon de flou, borné à 9 : au-delà le coût
+            // grimpe sans que l'œil distingue quoi que ce soit de plus.
+            let deplacement = angleTourbillon * grandCote * 0.75 / 4
+            let rayonFlouPx = max(2, grandCote * rayonFlouRelatif)
+            let echantillons = min(9, max(4, Int((deplacement / rayonFlouPx).rounded(.up)) + 1))
+
+            var file = flou
                 .clampedToExtent()
                 .applyingFilter("CIVortexDistortion", parameters: [
                     "inputCenter": centre,
                     "inputRadius": Float(grandCote * 0.75),
-                    "inputAngle": Float(angleTourbillon)
+                    "inputAngle": Float(0)
                 ])
                 .cropped(to: cadre)
 
-            flou = tordu.applyingFilter("CIBlendWithMask", parameters: [
+            for n in 1..<echantillons {
+                let fraction = CGFloat(n) / CGFloat(echantillons - 1)
+                let copie = flou
+                    .clampedToExtent()
+                    .applyingFilter("CIVortexDistortion", parameters: [
+                        "inputCenter": centre,
+                        "inputRadius": Float(grandCote * 0.75),
+                        "inputAngle": Float(angleTourbillon * fraction)
+                    ])
+                    .cropped(to: cadre)
+                file = copie.applyingFilter("CIDissolveTransition", parameters: [
+                    "inputTargetImage": file,
+                    kCIInputTimeKey: Float(CGFloat(n) / CGFloat(n + 1))
+                ])
+            }
+
+            flou = file.applyingFilter("CIBlendWithMask", parameters: [
                 "inputBackgroundImage": flou,
                 "inputMaskImage": masqueTourbillon
             ])
