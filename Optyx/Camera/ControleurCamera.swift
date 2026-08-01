@@ -610,10 +610,16 @@ final class ControleurCamera: NSObject, ObservableObject {
             .builtInDualCamera,       // grand-angle + télé
             .builtInWideAngleCamera   // frontale, et modèles à une seule caméra
         ]
+        // `position` est recopiée dans une locale AVANT la fermeture. Une
+        // séquence paresseuse RETIENT sa fermeture, qui est donc échappante :
+        // lire une propriété d'instance à l'intérieur exigerait un `self.`
+        // explicite et prolongerait la vie du contrôleur le temps de la
+        // recherche. La locale évite les deux.
+        let cible = position
         let appareilTrouve = typesPreferes.lazy.compactMap { type in
             AVCaptureDevice.DiscoverySession(deviceTypes: [type],
                                              mediaType: .video,
-                                             position: position).devices.first
+                                             position: cible).devices.first
         }.first
 
         guard let appareil = appareilTrouve else {
