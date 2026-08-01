@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 // MARK: - Paramètres du disque de bokeh
@@ -124,6 +125,37 @@ struct Lens: Identifiable, Hashable {
     let name: String
     /// Focale et ouverture, en toutes lettres : « 58 mm f/2 ».
     let focal: String
+
+    /// FOCALE RÉELLE du verre, en millimètres pour un capteur 24×36.
+    ///
+    /// Elle est déduite de `focal`, qui reste la source unique — la chaîne
+    /// affichée sur la fiche et le nombre utilisé par la caméra ne peuvent donc
+    /// pas diverger. Le repli à 50 mm couvre le cas de l'Angénieux, dont la
+    /// fiche annonce « zoom 25–250 mm » : on retient la position de référence
+    /// choisie pour la simulation, la plus employée en tournage.
+    var focaleMM: Double {
+        // Premier nombre de la chaîne, avant « mm ». « 58 mm f/2 » → 58,
+        // « zoom 25–250 mm » → 25, qu'on écarte au profit de 50.
+        if focal.hasPrefix("zoom") { return 50 }
+        let chiffres = focal.prefix { $0.isNumber }
+        return Double(chiffres) ?? 50
+    }
+
+    /// FACTEUR DE ZOOM qui donne à cet objectif son cadrage réel.
+    ///
+    /// L'objectif principal d'un iPhone couvre l'équivalent d'un 26 mm. Un
+    /// Trioplan 100 mm voit donc presque quatre fois plus serré, et un
+    /// Summicron 50 mm environ deux fois. Sans cette correspondance, les neuf
+    /// verres cadrent identique — ce qui est faux, et se remarque tout de
+    /// suite : la focale est la première chose qu'on perçoit d'un objectif,
+    /// avant même son bokeh.
+    ///
+    /// Borné à 1 par le bas : descendre sous 1 exigerait l'ultra grand-angle,
+    /// une caméra PHYSIQUEMENT différente, dont le champ, la distorsion et le
+    /// bruit ne correspondent à aucun des neuf verres.
+    var zoomEquivalent: CGFloat {
+        max(1, CGFloat(focaleMM / 26.0))
+    }
     let origin: String
     let era: String
     let story: String

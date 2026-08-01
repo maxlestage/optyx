@@ -121,6 +121,9 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// pas demandé.
     @Published private(set) var histogramme: DonneesHistogramme = .vide
 
+    /// Facteur de zoom courant, pour l'affichage. 1 = champ natif du grand-angle.
+    @Published private(set) var zoom: CGFloat = 1
+
     /// Un enregistrement vidéo est-il en cours ? Pilote le bouton et le
     /// chronomètre.
     @Published private(set) var enregistrementEnCours = false
@@ -208,6 +211,10 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// Jeton de la capture en cours, pour que le garde-fou de déverrouillage ne
     /// libère jamais une capture ultérieure. Fil principal uniquement.
     private var jetonCapture = UUID()
+
+    /// Appareil rattaché à la session. `fileSession` uniquement — c'est lui qui
+    /// porte le zoom, et il change à chaque bascule.
+    private var appareilCourant: AVCaptureDevice?
 
     /// Copies protégées par `verrouReglages`, lues à chaque trame sur
     /// `fileVideo`. Les `@Published` correspondants appartiennent au fil
@@ -438,6 +445,10 @@ final class ControleurCamera: NSObject, ObservableObject {
                 self.jetonCapture = UUID()
                 self.captureEnCours = false
                 self.frontale = (cible == .front)
+                // Le zoom est porté par le PÉRIPHÉRIQUE, pas par la session :
+                // il repart à 1 sur la caméra qu'on vient de rattacher, et le
+                // cadrage de l'objectif serait perdu à la première bascule.
+                self.appliquerZoom(pour: self.lens)
                 // Le miroir du viseur dépend de la position : il faut recalculer
                 // l'orientation capteur maintenant, pas au prochain pivotement.
                 self.appliquerOrientation()
@@ -521,6 +532,7 @@ final class ControleurCamera: NSObject, ObservableObject {
             return false
         }
         session.addInput(entree)
+        appareilCourant = appareil
 
         guard session.canAddOutput(sortieVideo) else {
             session.commitConfiguration()
@@ -879,6 +891,39 @@ final class ControleurCamera: NSObject, ObservableObject {
             requete.addResource(with: .photo, data: jpeg, options: nil)
         } completionHandler: { [weak self] succes, _ in
             self?.terminerCapture(succes ? .enregistree : .echec)
+        }
+    }
+
+    // MARK: - Zoom
+
+    /// Règle le zoom sur la focale RÉELLE de l'objectif.
+    ///
+    /// L'objectif principal d'un iPhone couvre l'équivalent d'un 26 mm. Un
+    /// Trioplan 100 mm voit donc presque quatre fois plus serré (×3,85), un
+    /// Summicron 50 mm environ deux fois (×1,92), tandis que les 58 mm sont à
+    /// ×2,23. Sans cela les neuf verres cadraient IDENTIQUE, ce qui est faux :
+    /// la focale est la première chose qu'on perçoit d'un objectif, avant même
+    /// son bokeh, et c'est ce qui manquait le plus après le rendu.
+    ///
+    /// `lockForConfiguration` dans un `do/catch`, jamais `try!` : le verrou
+    /// échoue légitimement si une autre app tient le périphérique, et ce n'est
+    /// pas une raison de faire tomber l'app — on garde alors le zoom précédent.
+    func appliquerZoom(pour lens: Lens) {
+        let demande = lens.zoomEquivalent
+        fileSession.async { [weak self] in
+            guard let self, let appareil = self.appareilCourant else { return }
+            // Borné au maximum RÉEL du périphérique : la frontale plafonne bien
+            // plus bas que l'arrière, et dépasser lève une exception
+            // Objective-C que Swift ne rattrape pas.
+            let effectif = min(max(demande, 1), appareil.maxAvailableVideoZoomFactor)
+            do {
+                try appareil.lockForConfiguration()
+                appareil.videoZoomFactor = effectif
+                appareil.unlockForConfiguration()
+            } catch {
+                return
+            }
+            DispatchQueue.main.async { self.zoom = effectif }
         }
     }
 
