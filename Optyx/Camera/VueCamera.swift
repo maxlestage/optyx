@@ -133,6 +133,26 @@ struct VueCamera: View {
 
     private var vueDuViseur: some View {
         VueApercu(rendu: viseur)
+            // DÉCLENCHEUR MATÉRIEL — boutons de volume et bouton Commande.
+            //
+            // Posé sur le viseur, qui est la seule vue présente pendant toute
+            // la durée de vie de l'écran : l'accrocher à une commande du bas le
+            // ferait disparaître avec elle. La vue superposée est transparente
+            // et ne capte aucun toucher.
+            //
+            // Un appui pendant un enregistrement l'ARRÊTE, il ne prend pas une
+            // photo : c'est le geste attendu, et prendre une photo à ce moment
+            // laisserait la vidéo tourner sans que rien ne le signale.
+            .overlay(
+                DeclencheurPhysique {
+                    if camera.enregistrementEnCours {
+                        camera.basculerEnregistrement()
+                    } else {
+                        camera.declencher()
+                    }
+                }
+                .allowsHitTesting(false)
+            )
             // Plein cadre, jusque sous l'encoche : le viseur est l'écran.
             // L'image y est cadrée en aspect-fit, donc rien n'est rogné — ce
             // sont les bandes noires qui vont sous les bords, pas la photo.
