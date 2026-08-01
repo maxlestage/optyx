@@ -347,8 +347,8 @@ enum MoteurOptique {
             teintee = teintee
                 .clampedToExtent()
                 .applyingFilter("CISharpenLuminance", parameters: [
-                    "inputSharpness": Float(sig.microContraste * k * 2.0),
-                    "inputRadius": Float(max(1.2, grandCote * 0.004))
+                    "inputSharpness": Float(sig.microContraste * k * 0.45),
+                    "inputRadius": Float(max(1.0, grandCote * 0.0018))
                 ])
                 .cropped(to: cadre)
         }
@@ -697,7 +697,7 @@ enum MoteurOptique {
                                               // Takumar. Le plafond ne mord
                                               // désormais que sur lui, ce qui
                                               // préserve l'ordre des neuf verres.
-                                              facteur: min(0.92, CGFloat(p.haze) * k * 6.5)))
+                                              facteur: min(0.45, CGFloat(p.haze) * k * 1.8)))
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -736,7 +736,7 @@ enum MoteurOptique {
             image = image.applyingFilter("CIVignetteEffect", parameters: [
                 "inputCenter": centre,
                 "inputRadius": Float(refVignettage * 0.62),
-                "inputIntensity": Float(sig.vignettage * k * 2.05),
+                "inputIntensity": Float(sig.vignettage * k * 0.70),
                 "inputFalloff": Float(0.60)
             ])
         }
