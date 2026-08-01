@@ -205,6 +205,10 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// `fileVideo` uniquement.
     private var compteurHistogramme = 0
 
+    /// Jeton de la capture en cours, pour que le garde-fou de déverrouillage ne
+    /// libère jamais une capture ultérieure. Fil principal uniquement.
+    private var jetonCapture = UUID()
+
     /// Copies protégées par `verrouReglages`, lues à chaque trame sur
     /// `fileVideo`. Les `@Published` correspondants appartiennent au fil
     /// principal : les lire depuis la file vidéo serait une course de données,
@@ -392,6 +396,13 @@ final class ControleurCamera: NSObject, ObservableObject {
 
     /// Passe de l'arrière à l'avant, et retour.
     func basculerCamera() {
+        // Un enregistrement est CLOS avant la bascule. Les deux caméras ne
+        // livrent pas les mêmes dimensions : l'écrivain, figé sur la taille de
+        // la première trame, refuserait ensuite chaque image en silence — la
+        // vidéo s'arrêterait à l'instant de la bascule sans que rien ne le
+        // signale, et le chronomètre continuerait de courir.
+        if enregistrementEnCours { arreterEnregistrement() }
+
         fileSession.async { [weak self] in
             guard let self else { return }
             let cible: AVCaptureDevice.Position = (self.position == .back) ? .front : .back
@@ -420,6 +431,12 @@ final class ControleurCamera: NSObject, ObservableObject {
             if marchait, !self.session.isRunning { self.session.startRunning() }
 
             DispatchQueue.main.async {
+                // ÉTAT TRANSITOIRE REMIS À PLAT. Une bascule pendant une
+                // capture laissait `captureEnCours` à vrai indéfiniment : le
+                // délégué photo de la session DÉTRUITE ne se présente jamais,
+                // et tous les boutons restent désactivés. L'app paraît morte.
+                self.jetonCapture = UUID()
+                self.captureEnCours = false
                 self.frontale = (cible == .front)
                 // Le miroir du viseur dépend de la position : il faut recalculer
                 // l'orientation capteur maintenant, pas au prochain pivotement.
@@ -752,6 +769,27 @@ final class ControleurCamera: NSObject, ObservableObject {
         captureEnCours = true
         retourCapture = nil
 
+        // GARDE-FOU DE DÉVERROUILLAGE. Tout le bas de l'écran — déclencheur,
+        // bouton vidéo — est désactivé tant que `captureEnCours` est vrai. Si
+        // le délégué de capture ne se présente jamais (cas observé au retour de
+        // la caméra frontale), l'app reste vivante mais TOUS ses boutons sont
+        // morts, ce qui se lit exactement comme un plantage.
+        //
+        // Six secondes : bien au-delà d'une capture normale, y compris le
+        // développement à 3200 px, et bien en deçà de la patience de qui vient
+        // d'appuyer sur un bouton qui ne répond plus.
+        //
+        // Le jeton évite qu'un garde-fou périmé ne déverrouille une capture
+        // ultérieure légitime — deux appuis rapprochés ne doivent pas se
+        // marcher dessus.
+        let jeton = UUID()
+        jetonCapture = jeton
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+            guard let self, self.jetonCapture == jeton, self.captureEnCours else { return }
+            self.captureEnCours = false
+            self.retourCapture = .echec
+        }
+
         let angle = Self.angleRotationPhoto(tenue: tenue)
 
         fileSession.async { [weak self] in
@@ -797,8 +835,12 @@ final class ControleurCamera: NSObject, ObservableObject {
 
     private func terminerCapture(_ retour: RetourCapture) {
         DispatchQueue.main.async { [weak self] in
-            self?.captureEnCours = false
-            self?.retourCapture = retour
+            guard let self else { return }
+            // Nouveau jeton : le garde-fou armé pour CETTE capture ne peut plus
+            // déverrouiller quoi que ce soit.
+            self.jetonCapture = UUID()
+            self.captureEnCours = false
+            self.retourCapture = retour
         }
     }
 
@@ -1111,7 +1153,23 @@ extension ControleurCamera: AVCaptureVideoDataOutputSampleBufferDelegate,
         // ambiguïté gratuite pour le prochain lecteur.
         guard let emettre = surTrameViseur else { return }
 
-        let orientee = CIImage(cvPixelBuffer: source).oriented(orientationCapteur)
+        // NORMALISATION DE L'ORIGINE, juste après l'orientation.
+        //
+        // Les orientations de la caméra FRONTALE sont miroitées
+        // (`.leftMirrored`, `.upMirrored`…), et une transformation à déterminant
+        // négatif peut laisser l'étendue avec une origine non nulle. Tout le
+        // moteur construit ses masques à partir de `cadre.midX` / `cadre.midY` :
+        // si le contenu de l'image ne coïncide pas avec le cadre annoncé, le
+        // vignettage, le masque de flou et celui du tourbillon se centrent à
+        // côté de l'image — les effets deviennent invisibles ou décalés, et
+        // uniquement en frontale. Ramener l'origine à zéro ICI supprime la
+        // catégorie entière, pour le coût d'une translation qui se replie dans
+        // le graphe.
+        let brute0 = CIImage(cvPixelBuffer: source).oriented(orientationCapteur)
+        let orientee = brute0.extent.origin == .zero
+            ? brute0
+            : brute0.transformed(by: CGAffineTransform(translationX: -brute0.extent.origin.x,
+                                                       y: -brute0.extent.origin.y))
         let etendue = orientee.extent
         // `isInfinite` avant toute conversion en `Int` : une `CIImage` d'étendue
         // infinie donnerait `Int(CGFloat.infinity)`, qui ne renvoie pas une
