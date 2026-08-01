@@ -806,16 +806,28 @@ enum MoteurOptique {
             // quelques pour cent, pas un calque opaque. Le réglage précédent, 0,14,
             // donnait 0,96 / 1,07 / 0,60 % : lisible, mais tout juste au-dessus du
             // bruit de quantification une fois le fichier réduit à l'écran.
-            // 0,24 était TROP : sur appareil, l'Angénieux couvrait l'image d'un
-            // moucheté blanc qui se lit comme du bruit de capteur, pas comme du
-            // grain argentique. La différence entre les deux n'est pas
-            // l'amplitude seule mais le rapport amplitude/taille de cellule :
-            // depuis que la cellule suit la résolution (elle mesure 0,1 % du
-            // grand côté au lieu d'un pixel), chaque grain est ~3,6 fois plus
-            // large qu'avant à l'export, donc bien plus visible à amplitude
-            // égale. 0,14 rend un voile dans [0,43 ; 0,57] : une texture qui se
-            // voit franchement sans envahir l'image.
-            let oscillation = CGFloat(p.grain) * k * 0.14
+            // 0,24 était TROP, 0,14 l'était encore : sur appareil l'Angénieux
+            // restait couvert d'un moucheté BLANC. Ce n'était pas une question
+            // d'amplitude — c'était la troisième panne de cet étage, décrite
+            // juste en dessous (`fondOpaque`). Les deux jugements « trop fort »
+            // portés sur 0,24 puis 0,14 ont été rendus À TRAVERS ce défaut : ils
+            // ne disent donc rien de l'amplitude elle-même et sont écartés.
+            //
+            // Une fois le voile réellement borné, l'amplitude se choisit au
+            // calcul. Écart-type du RÉSULTAT après `CISoftLightBlendMode`
+            // (Monte-Carlo, 400 000 tirages, mesuré en sRGB) :
+            //
+            //     amplitude   fond 0,20    fond 0,50    fond 0,80
+            //     0,24        1,5 /255     4,1 /255     2,2 /255
+            //     0,16        2,6 /255     3,1 /255     1,7 /255
+            //     0,14        2,3 /255     2,7 /255     1,5 /255
+            //
+            // 0,16 place les demi-teintes à 3 niveaux sur 255 : une texture qui
+            // se lit sur un aplat sans jamais devenir un calque, et l'ordre de
+            // grandeur d'un tirage argentique. Le grain reste plus discret dans
+            // les hautes lumières que dans les demi-teintes, comme sur pellicule,
+            // parce que la lumière douce écrase les deux extrémités de la plage.
+            let oscillation = CGFloat(p.grain) * k * 0.16
             // Un tiers par canal, puisque les trois sont sommés : c'est ce
             // facteur 3 qui manquait.
             let parCanal = oscillation / 3
@@ -842,7 +854,44 @@ enum MoteurOptique {
             // petite qu'un pixel — et ne mord que sur une source de moins de 900 px
             // importée dans le studio.
             let echelleGrain = max(1, grandCote / Self.coteGrain)
+            // ALPHA DU BRUIT, et c'est la troisième panne — celle qui a fait
+            // passer deux baisses d'amplitude pour insuffisantes.
+            //
+            // `CIRandomGenerator` tire QUATRE nombres indépendants par pixel,
+            // alpha compris. Son alpha est donc aléatoire, et ses RVB ne sont pas
+            // prémultipliés par lui : l'image n'est pas un RVBA valide. Or
+            // `CIColorMatrix` est un noyau de COULEUR — Core Image DÉPRÉMULTIPLIE
+            // avant de l'appliquer. La matrice ne voyait donc pas r, v, b mais
+            // r/a, v/a, b/a, dont l'espérance diverge. Le voile, annoncé dans
+            // [0,43 ; 0,57], partait en réalité jusqu'à plusieurs unités.
+            //
+            // Mesuré (Monte-Carlo, 400 000 tirages, amplitude 0,14, en sRGB) :
+            //
+            //                        fond 0,20      fond 0,50      fond 0,80
+            //     écart-type         35,1 /255      32,0 /255      13,9 /255
+            //     moyenne            0,20 → 0,284   0,50 → 0,585   0,80 → 0,836
+            //     pixels à +20 /255  28,4 %         29,8 %         14,4 %
+            //
+            // soit douze fois l'écart-type annoncé par le commentaire, et un
+            // biais franchement CLAIR — près d'un tiers des pixels éclaircis
+            // d'au moins vingt niveaux. C'est très exactement le « moucheté
+            // blanc » observé, et la raison pour laquelle diviser l'amplitude
+            // par deux n'y changeait presque rien : le défaut n'était pas dans
+            // l'amplitude mais dans la queue de distribution.
+            //
+            // Le correctif compose d'abord le bruit sur un NOIR OPAQUE. Le
+            // « source-over » est défini sur des valeurs prémultipliées et n'en
+            // divise donc aucune : il sort rgb inchangé et alpha = a + 1·(1−a)
+            // = 1. La déprémultiplication qui suit devient l'identité, et la
+            // matrice reçoit enfin les uniformes [0, 1] qu'elle a toujours
+            // supposés. Le `CIColorClamp` final rend la borne STRUCTURELLE
+            // plutôt que statistique : quoi que fasse le générateur, le voile ne
+            // peut pas quitter [socle ; socle + oscillation].
+            let fondOpaque = CIImage(color: .black).cropped(to: cadre)
             let voileGrain = bruit
+                .applyingFilter("CISourceOverCompositing", parameters: [
+                    "inputBackgroundImage": fondOpaque
+                ])
                 .samplingNearest()
                 .transformed(by: CGAffineTransform(scaleX: echelleGrain, y: echelleGrain))
                 .cropped(to: cadre)
@@ -855,6 +904,12 @@ enum MoteurOptique {
                     "inputBVector": CIVector(x: parCanal, y: parCanal, z: parCanal, w: 0),
                     "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
                     "inputBiasVector": CIVector(x: socle, y: socle, z: socle, w: 1)
+                ])
+                .applyingFilter("CIColorClamp", parameters: [
+                    "inputMinComponents": CIVector(x: socle, y: socle, z: socle, w: 1),
+                    "inputMaxComponents": CIVector(x: socle + oscillation,
+                                                   y: socle + oscillation,
+                                                   z: socle + oscillation, w: 1)
                 ])
             image = voileGrain.applyingFilter("CISoftLightBlendMode", parameters: [
                 "inputBackgroundImage": image
