@@ -347,7 +347,7 @@ enum MoteurOptique {
             teintee = teintee
                 .clampedToExtent()
                 .applyingFilter("CISharpenLuminance", parameters: [
-                    "inputSharpness": Float(sig.microContraste * k * 1.4),
+                    "inputSharpness": Float(sig.microContraste * k * 2.0),
                     "inputRadius": Float(max(1.2, grandCote * 0.004))
                 ])
                 .cropped(to: cadre)
@@ -377,7 +377,7 @@ enum MoteurOptique {
         // 31 % du maximum. Un départ à 0 rendrait la moitié basse du curseur
         // inutile.
         // ─────────────────────────────────────────────────────────────────────
-        let rayonFlouRelatif = min(max(0.024 * CGFloat(p.size) * (0.30 + 0.70 * k), 0.0025), 0.045)
+        let rayonFlouRelatif = min(max(0.036 * CGFloat(p.size) * (0.30 + 0.70 * k), 0.0025), 0.070)
 
         var flou = teintee
             .clampedToExtent()
@@ -476,7 +476,7 @@ enum MoteurOptique {
         //     Le déplacement maximal est donc porté à 5,5 % du grand côté, soit
         //     49,5 px au viseur et 176 px à l'export pour l'Helios. C'est un
         //     mouvement franc du fond, qui se lit immédiatement.
-        let angleTourbillon = CGFloat(p.swirl) * k * (0.080 / 0.1875)
+        let angleTourbillon = CGFloat(p.swirl) * k * (0.125 / 0.1875)
 
         if p.swirl > 0.02,
            let masqueTourbillon = masqueCadre(cadre: cadre, debut: 0.70, fin: 0.95) {
@@ -638,7 +638,7 @@ enum MoteurOptique {
                                               // Takumar. Le plafond ne mord
                                               // désormais que sur lui, ce qui
                                               // préserve l'ordre des neuf verres.
-                                              facteur: min(0.8, CGFloat(p.haze) * k * 4.5)))
+                                              facteur: min(0.92, CGFloat(p.haze) * k * 6.5)))
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -677,7 +677,7 @@ enum MoteurOptique {
             image = image.applyingFilter("CIVignetteEffect", parameters: [
                 "inputCenter": centre,
                 "inputRadius": Float(refVignettage * 0.62),
-                "inputIntensity": Float(sig.vignettage * k * 1.10),
+                "inputIntensity": Float(sig.vignettage * k * 1.45),
                 "inputFalloff": Float(0.60)
             ])
         }
@@ -978,7 +978,7 @@ enum MoteurOptique {
         // haut-de-forme, qui annule tout bord franc et toute grande surface) et
         // T5 (allongement, qui annule les lamelles fines) qui font ce travail.
         // T1 ne fait que dire « c'est lumineux ».
-        let t1 = rampe(luminance, bas: 0.80, haut: 0.99)
+        let t1 = rampe(luminance, bas: 0.72, haut: 0.98)
 
         // T2 — ENTOURAGE SOMBRE. Rampe DÉCROISSANTE sur l'érosion : au centre
         // d'une grande surface claire le minimum local reste clair, à portée
@@ -1099,7 +1099,7 @@ enum MoteurOptique {
         // disques ne pouvaient apparaître qu'à la tombée de la nuit. À 0,75, un
         // salon éclairé les laisse passer, une plage en plein soleil (ambiance
         // 0,80 et au-delà) continue de les refuser.
-        let t4 = rampe(ambiance, bas: 0.75, haut: 0.28)
+        let t4 = rampe(ambiance, bas: 0.82, haut: 0.30)
 
         // T5 — COMPACITÉ. Le critère qui manquait, et le seul qui ferme réellement
         // l'angle mort de T3 décrit plus haut : une lamelle de ciel entre deux
