@@ -105,6 +105,57 @@ enum MoteurOptique {
     /// morphologie (l'étape la plus coûteuse) dans des durées acceptables.
     static let coteExport: CGFloat = 3200
 
+    /// Grille de référence du GRAIN, en pixels du grand côté.
+    ///
+    /// `CIRandomGenerator` tire une valeur indépendante par pixel de la grille de
+    /// TRAVAIL : sans agrandissement, la cellule de bruit mesure 1 px que le cadre
+    /// fasse 900 ou 3200. C'était la seule longueur du moteur exprimée en pixels
+    /// absolus, en violation directe de R3, et donc le seul effet dont le viseur
+    /// et le fichier n'étaient pas la même image à l'échelle près. Le bruit est
+    /// désormais tiré sur cette grille fixe puis agrandi au cadre, si bien que la
+    /// cellule vaut toujours 1/900 du grand côté.
+    ///
+    /// La valeur coïncide avec `ControleurCamera.coteViseur` — non par hasard :
+    /// c'est au viseur que l'auteur règle le grain, et un facteur d'agrandissement
+    /// exactement égal à 1 y garantit qu'aucun rééchantillonnage ne s'interpose.
+    /// La constante est recopiée plutôt qu'importée pour que le moteur ne dépende
+    /// pas du contrôleur de caméra ; si l'une bouge, l'autre doit suivre.
+    static let coteGrain: CGFloat = 900
+
+    /// Grille de référence de la DÉTECTION DE POINTS, en pixels du grand côté.
+    ///
+    /// Même principe que `coteGrain`, et même panne à la racine : `detecterPoints`
+    /// seuille une LUMINANCE ABSOLUE (T1, rampe 0,88 → 0,99). Or la crête d'une
+    /// source ponctuelle ne survit au sous-échantillonnage qu'à proportion de la
+    /// réduction subie. Détecter sur le tampon de travail faisait donc de la
+    /// détection une propriété de la TAILLE DU TAMPON, pas de la scène.
+    ///
+    /// Mesuré sur une source carrée de S pixels capteur (grand côté 4032), phase
+    /// sous-pixel balayée sur une période complète, seuil S50 = valeur de S où le
+    /// t1 moyen atteint 0,5 :
+    ///
+    ///     détection sur le tampon de travail   viseur 4,05  aperçu 4,48  export 2,05
+    ///     détection normalisée à 900           viseur 6,32  aperçu 7,30  export 6,41
+    ///
+    /// soit un rapport max/min qui tombe de 2,19 à 1,16, et des bandes
+    /// d'indécision qui se superposent au lieu d'être disjointes : 5,0-9,8 px au
+    /// viseur, 5,2-10,6 à l'aperçu, 5,2-10,1 à l'export, contre 1,7-6,4 / 3,8-7,5 /
+    /// 1,5-3,2 auparavant. Concrètement, une guirlande de 5 mm entre 2,6 m et 8,1 m
+    /// produisait des disques dans le FICHIER et rien au viseur.
+    ///
+    /// La valeur coïncide avec `ControleurCamera.coteViseur` et avec `coteGrain`,
+    /// pour la même raison qu'eux : c'est au viseur que l'auteur règle le rendu, et
+    /// un facteur de réduction exactement égal à 1 y garantit qu'aucun
+    /// rééchantillonnage ne s'interpose. La constante est recopiée plutôt
+    /// qu'importée pour que le moteur ne dépende pas du contrôleur de caméra ; si
+    /// l'une bouge, les autres doivent suivre.
+    ///
+    /// Cette normalisation forme une PAIRE avec le rééchantillonnage Lanczos du
+    /// viseur (`ControleurCamera.captureOutput`) : appliquée seule elle ramène le
+    /// rapport à 1,80 seulement, et le Lanczos appliqué seul le porte à 3,09,
+    /// c'est-à-dire PIRE que l'état d'origine. Ne pas défaire l'une sans l'autre.
+    static let coteDetection: CGFloat = 900
+
     // MARK: - Préparation
 
     /// Décode et réduit, en normalisant l'orientation.
@@ -199,6 +250,31 @@ enum MoteurOptique {
         let grandCote = max(cadre.width, cadre.height)
         let petitCote = min(cadre.width, cadre.height)
         let centre = CIVector(x: cadre.midX, y: cadre.midY)
+
+        // RÉFÉRENCE DES VIGNETTAGES (A3 et C7). `CIVignetteEffect` est un filtre
+        // CIRCULAIRE : son rayon ancré sur le petit côté garde bien la même
+        // amplitude au bord et au coin quel que soit le format — vérifié, t vaut
+        // 0,806 au milieu du petit côté et 1,000 au coin pour TOUS les rapports —
+        // mais la SURFACE saturée, elle, explose avec l'allongement. Grand côté
+        // fixé à 1200, part du cadre au vignettage MAXIMAL (d ≥ 0,62·petitCôté) :
+        //   1,00 → 3,2 %   1,333 → 18,4 %   1,50 → 27,5 %   2,17 → 49,9 %
+        //   3,00 → 63,7 %  5,00 → 78,2 %    8,00 → 86,4 %
+        // Le viseur (4:3) n'est pas concerné, mais le studio accepte n'importe
+        // quelle image du sélecteur, donc un panoramique iPhone : les trois quarts
+        // d'un tel cadre étaient assombris au maximum — l'image détruite, pas
+        // stylisée. C'est le mécanisme du bug de format, transposé à l'import.
+        //
+        // La borne est choisie neutre sur les cadres réellement produits par
+        // l'appareil : 0,60·diagonale d'un 4:3 vaut exactement 0,60·(5/3) =
+        // 1,000·petitCôté, et 0,849·petitCôté sur un carré, donc `max` retient le
+        // petit côté et rien ne bouge. Sur le cadre du viseur, 674×900 — rapport
+        // 1,3353 et non 4/3 pile, à cause de l'arrondi aux dimensions paires — le
+        // rapport vaut 1,0009 : le vignettage change de 0,09 %, soit rien. La borne
+        // ne se relâche que sur les formats allongés, où elle plafonne la surface
+        // saturée :
+        //   1,00 → 3,2 %  1,333 → 18,4 %  1,50 → 19,7 %  2,17 → 22,6 %
+        //   3,00 → 24,0 % 5,00 → 25,0 %   8,00 → 25,4 %
+        let refVignettage = max(petitCote, 0.60 * hypot(cadre.width, cadre.height))
         let sig = SignatureTonale.pour(lens)
 
         // ─────────────────────────────────────────────────────────────────────
@@ -283,35 +359,65 @@ enum MoteurOptique {
         // des déplacements de 200 à 500 px. D'où l'horizon fantôme en travers du
         // ciel et les contours fantômes sur les épaules.
         //
-        // Réglage corrigé : le masque sature à 0,58·petitCote, largement à
-        // l'intérieur du cadre (le coin d'un 3:2 est à 0,90·petitCote). La bande
-        // de fondu ne fait plus que 0,18·petitCote au lieu de 0,60, et au-delà le
-        // tourbillon est utilisé SEUL. Dans la bande résiduelle, l'angle réduit
-        // (0,45 rad) maintient le déplacement sous ~60 px, du même ordre que le
-        // flou de B1, qui l'absorbe.
+        // LE RÉGLAGE PRÉCÉDENT (masqueRadial, r0 = 0,40·petitCote, r1 =
+        // 0,58·petitCote, angle 0,45 rad) ÉTAIT ENCORE FAUX, et de deux façons
+        // indépendantes. Les nombres, refaits sur le cadre réel du viseur 674×900 :
         //
-        // PROFIL : `CIVortexDistortion` tourne le plus AU CENTRE et décroît vers
-        // `inputRadius` — l'inverse du tourbillon optique réel, maximal en
-        // périphérie. Aucun filtre Core Image n'offre le profil inverse ; on
-        // corrige en sélectionnant la couronne utile par un second masque
-        // radial, décalé vers l'extérieur. Le centre — donc le visage — est
-        // ainsi protégé DEUX fois : par ce masque et par celui de l'étape B3.
+        //   • r1 = 0,58·petitCote est SUPÉRIEUR à 0,50·petitCote, la distance du
+        //     centre au milieu du bord vertical. Le masque y vaut 0,556 — jamais 1.
+        //     Il ne sature donc sur AUCUN point de la bande centrale, exactement le
+        //     défaut structurel de B3 avant correction. Surface encore en
+        //     fondu-croisé strict (0 < m < 1) : 36,7 % du cadre au viseur, 32,6 %
+        //     en 3:2, 36,7 % à l'export — invariant, donc présent partout.
+        //   • Le commentaire justifiait ce résidu en affirmant que le déplacement
+        //     « reste sous ~60 px, du même ordre que le flou de B1, qui l'absorbe ».
+        //     Mesuré, avec le profil documenté θ(r) = angle·(1 − r/R) : le
+        //     déplacement 2r·sin(θ/2) est maximal en r = R/2 et vaut 75,8 px pour
+        //     l'Helios à k = 1, contre un flou B1 de 7,92 px. Pas « du même ordre » :
+        //     9,57 fois plus. Biotar : 51,6 px contre 8,64 px, soit 5,97×. À
+        //     l'export les deux nombres sont multipliés par 3,56 et le RATIO est
+        //     identique — l'invariance d'échelle était respectée, c'était
+        //     l'amplitude qui était fausse. Un fondu-croisé entre deux images
+        //     séparées de 9,6 largeurs de flou EST le régime de dédoublement.
         //
-        // L'angle est volontairement MODESTE (0,45 rad au maximum). L'ancienne
-        // valeur de 2,4 rad n'était étayée par rien, et c'est elle qui rendait le
-        // fondu-croisé destructeur. Un tourbillon se lit au mouvement du fond, pas
-        // à l'amplitude de la rotation. L'unité est le radian.
+        // DEUX CORRECTIONS, les deux nécessaires.
+        //
+        // (1) MASQUE NORMALISÉ AU CADRE, comme en B3 : u = 1 est l'ellipse
+        //     inscrite, le coin est à u = √2, pour TOUT format. Avec fin = 0,95 < 1
+        //     le masque sature sur tout le pourtour, y compris au milieu des bords
+        //     du petit côté. Statistiques rigoureusement indépendantes du rapport
+        //     d'image — vérifiées identiques à 1,00 / 1,335 / 1,50 / 2,17 / 5,00 :
+        //         m moyen 0,461 · tourbillon PLEIN 29,1 % · fondu-croisé 32,3 %
+        //         · image intacte 38,5 %
+        //     Le début à 0,70 (contre 0,52 en B3) garde la protection DOUBLE du
+        //     centre : la zone intacte du tourbillon contient largement l'ellipse
+        //     nette de B3.
+        //
+        // (2) ANGLE CALCULÉ, plus jamais posé en dur. `CIVortexDistortion` tourne
+        //     le plus AU CENTRE et décroît vers `inputRadius` (profil documenté,
+        //     l'inverse du tourbillon optique réel — d'où le masque qui ne garde
+        //     que la couronne). Avec θ(r) = angle·(1 − r/R) et R = 0,75·grandCôté,
+        //     le déplacement r·θ(r) est maximal en r = R/2 et y vaut
+        //     angle·R/4 = angle·0,1875·grandCôté. On impose que ce maximum reste
+        //     sous DEUX largeurs de flou B1 — la condition pour que B1 l'absorbe
+        //     réellement — d'où angle = swirl·k·2·rayonFlouRelatif/0,1875.
+        //     À k = 1, au viseur (grandCôté 900) : Helios 0,0939 rad, déplacement
+        //     15,8 px contre 7,92 px de flou (ratio 2,00 au lieu de 9,57) ; Biotar
+        //     0,0696 rad, 11,7 px contre 8,64 px ; Dream 0,0451 rad, 7,6 px contre
+        //     17,3 px ; Takumar 0,0064 rad, 1,1 px. À l'export tout est multiplié
+        //     par 3,56 et les ratios sont inchangés. Un tourbillon se lit au
+        //     mouvement du fond, pas à l'amplitude de la rotation.
         // ─────────────────────────────────────────────────────────────────────
+        let angleTourbillon = CGFloat(p.swirl) * k * (2 * rayonFlouRelatif / 0.1875)
+
         if p.swirl > 0.02,
-           let masqueTourbillon = masqueRadial(cadre: cadre,
-                                               rayon0: petitCote * 0.40,
-                                               rayon1: petitCote * 0.58) {
+           let masqueTourbillon = masqueCadre(cadre: cadre, debut: 0.70, fin: 0.95) {
             let tordu = flou
                 .clampedToExtent()
                 .applyingFilter("CIVortexDistortion", parameters: [
                     "inputCenter": centre,
                     "inputRadius": Float(grandCote * 0.75),
-                    "inputAngle": Float(CGFloat(p.swirl) * k * 0.45)
+                    "inputAngle": Float(angleTourbillon)
                 ])
                 .cropped(to: cadre)
 
@@ -322,57 +428,64 @@ enum MoteurOptique {
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        // B3. MASQUE RADIAL — le centre du cadre reste net.
+        // B3. MASQUE DE DÉFOCALISATION — le centre du cadre reste net.
         //
-        // ANCRAGE SUR LA DIAGONALE, et non sur le petit côté. L'ancrage sur le
-        // petit côté paraissait neutre entre portrait et paysage ; il ne l'est pas,
-        // parce que le rayon du COIN, lui, dépend de la diagonale. En PORTRAIT — le
-        // cadrage naturel d'un sujet debout, et celui des captures incriminées — le
-        // petit côté est la LARGEUR : pour un 800×1200 le disque net ne faisait que
-        // 240 px de rayon, soit 40 % de la hauteur, et une tête cadrée en pied
-        // tombait à 0,36 de masque. `CIBlendWithMask` y mélangeait 36 % d'une copie
-        // floutée avec le visage net : c'est LITTÉRALEMENT le « visage flou et
-        // dédoublé » reproché à la capture Helios. Effet symétrique en paysage : le
-        // milieu du bord haut ne recevait que 36 % du flou, donc la séparation
-        // sujet/fond — LE trait qui doit se lire sur toute photo — ne se lisait
-        // presque pas.
+        // HISTORIQUE, avec les nombres REFAITS. Deux ancrages successifs ont été
+        // essayés, et les deux ont produit un masque qui ne SATURE jamais sur la
+        // bande centrale du cadre. Or `CIBlendWithMask` est un FONDU LINÉAIRE
+        // entre l'image nette et l'image floue, pas un flou à rayon variable : à
+        // m = 0,39 il reste 61 % du détail net à TOUTES les fréquences. Un flou
+        // dosé à 39 % ne se lit pas comme un flou, il se lit comme rien.
         //
-        // Avec la diagonale, le disque net garde la même taille relative dans les
-        // deux orientations, et le masque SATURE à l'intérieur du cadre : pour un
-        // 800×1200 comme pour un 1200×800, disque net de 375 px de rayon, flou
-        // PLEIN dès 663 px alors que le coin est à 721. Le fond est donc vraiment
-        // flou au lieu d'être à moitié fondu, et la bande de fondu passe de 440 à
-        // 332 px.
+        //   • Ancrage DIAGONALE (r0 = 0,26·diag, r1 = 0,46·diag). Sur le cadre
+        //     réel du viseur, 674×900, il donnait m = 0,20 au bord vertical,
+        //     m moyen = 0,238, et 44,3 % du cadre PARFAITEMENT net. Le commentaire
+        //     précédent affirmait « masque ZÉRO sur toute la largeur » : c'est
+        //     faux sur ce cadre — le zéro ne s'obtient qu'à partir d'un rapport
+        //     d'image ≥ 1,643, qu'AUCUN preset AVFoundation ne produit.
+        //   • Ancrage PETIT CÔTÉ (r0 = 0,34, r1 = 0,75). Indépendant du format,
+        //     ce qui est le bon principe, mais r1 = 0,75·petitCôté est SUPÉRIEUR
+        //     à 0,50·petitCôté, la distance du centre au bord du petit côté :
+        //     aucun pixel de la bande centrale ne pouvait dépasser m = 0,390,
+        //     dans aucun des trois cadres. m moyen = 0,341, et 2,4 % du cadre
+        //     seulement au flou PLEIN — les quatre coins.
+        //
+        // LE CADRE RÉEL DU VISEUR, puisque les deux réglages précédents ont été
+        // dimensionnés sur un cadre imaginaire : `ControleurCamera` pose
+        // `session.sessionPreset = .photo`, donc un tampon 4:3 (4032×3024) que
+        // `.oriented()` met en portrait 3024×4032, réduit par
+        // min(1, 900/4032) = 0,2232 puis arrondi à des dimensions paires :
+        // 674×900, rapport 1,335. Le 1206×2622 invoqué auparavant est l'ÉCRAN, et
+        // `VueApercu.ajuster()` fait un aspect-fit : le 4:3 est letterboxé, jamais
+        // recadré au format de l'écran. Aucun cadre de rapport 2,17 n'existe dans
+        // cette app.
+        //
+        // RÉGLAGE ACTUEL — masque NORMALISÉ AU CADRE. Le rayon n'est plus une
+        // longueur mais une fraction du DEMI-CÔTÉ correspondant : u = 1 est
+        // l'ellipse inscrite, qui touche le milieu des quatre bords quel que soit
+        // le format ; le coin est à u = √2 pour tout format. Les statistiques du
+        // masque deviennent donc RIGOUREUSEMENT indépendantes du rapport d'image —
+        // vérifié à 1,00 / 1,333 / 1,50 / 2,17 / 5,00, valeurs identiques au
+        // millième :
+        //     début 0,52 → fin 0,95   m moyen = 0,564
+        //     aire au flou PLEIN 29,2 %   aire m ≥ 0,50 : 57,6 %   aire nette 21,3 %
+        // Contre 2,4 % / 32,1 % / 27,3 % pour le réglage précédent. C'est le seul
+        // changement qui fasse réellement exister le flou d'arrière-plan sur la
+        // bande centrale, là où se trouve le fond derrière la tête du sujet.
+        //
+        // Dans le viseur 674×900, l'ellipse nette a pour demi-axes 175×234 px : un
+        // visage centré y tient entièrement. Le flou est PLEIN au-delà de 320 px
+        // sur l'horizontale (bord à 337) et de 427 px sur la verticale (bord à
+        // 450), c'est-à-dire sur tout le pourtour du cadre.
         //
         // LIMITE ASSUMÉE : sans carte de profondeur, un sujet décentré verra une
         // partie de son corps floutée. La transition reste large pour que cette
         // erreur soit douce plutôt que franche. C'est le compromis explicite : un
-        // flou radial légèrement faux est infiniment moins choquant qu'un anneau
-        // inventé au bon endroit.
+        // flou légèrement faux est infiniment moins choquant qu'un anneau inventé
+        // au bon endroit.
         // ─────────────────────────────────────────────────────────────────────
-        // CORRECTION — l'ancrage sur la DIAGONALE, calibré sur un cadre 3:2,
-        // s'effondre sur un cadre très allongé, c'est-à-dire précisément sur le
-        // VISEUR d'un iPhone (1206×2622, rapport 2,17).
-        //
-        // La diagonale d'un tel cadre vaut 2,39 fois sa largeur : le disque net
-        // atteignait donc 0,62 fois la largeur, alors que le bord vertical n'est
-        // qu'à 0,50. Le masque valait ZÉRO sur TOUTE la largeur de l'image, et ne
-        // montait qu'aux extrémités haute et basse. Le flou d'arrière-plan — le
-        // trait censé se lire sur n'importe quelle photo — n'existait nulle part
-        // dans le viseur.
-        //
-        // Ancré sur le PETIT CÔTÉ, le masque se comporte à l'identique quel que
-        // soit le format, ce qui est la seule propriété qui compte ici :
-        //   3:2  (800×1200)  → net jusqu'à 272, bord vertical 0,39, coin 1,00
-        //   2,17 (1206×2622) → net jusqu'à 410, bord vertical 0,39, coin 1,00
-        // Le disque net couvre 68 % de la largeur : un visage cadré en pied, qui
-        // se tient au centre, y reste entièrement.
-        let petitCoteCadre = min(cadre.width, cadre.height)
-
         var fond = teintee
-        if let masqueFlou = masqueRadial(cadre: cadre,
-                                         rayon0: petitCoteCadre * 0.34,
-                                         rayon1: petitCoteCadre * 0.75) {
+        if let masqueFlou = masqueCadre(cadre: cadre, debut: 0.52, fin: 0.95) {
             fond = flou.applyingFilter("CIBlendWithMask", parameters: [
                 "inputBackgroundImage": teintee,
                 "inputMaskImage": masqueFlou
@@ -388,8 +501,36 @@ enum MoteurOptique {
         // DOUCE, sans morphologie, et surtout non conditionnée aux points
         // détectés — ce n'est pas le même phénomène.
         //
-        // `haze` vaut 0 à dessein chez le Summicron et le Noct-Nikkor : c'est une
-        // absence de voile revendiquée dans Lens.swift, pas un oubli.
+        // DEUX ÉCHELLES DE FLOU, et c'est la correction d'une panne mesurée. Un
+        // flou gaussien unique de rayon 0,035·grandCôté (31,5 px au viseur)
+        // DÉTRUIT le pic de la carte pour toute source PONCTUELLE : une tache
+        // spéculaire de 5 px ne laisse qu'un pic de 0,013 à 0,107 selon la
+        // convention de sigma, de 0,002 à 0,018 pour 2 px. Le « glow autour des
+        // hautes lumières » n'existait donc que devant une zone brûlée LARGE
+        // (≥ 80 px sur 900, soit ≥ 9 % du grand côté) — jamais autour d'un point
+        // de lumière, qui est pourtant le cas décrit par la fiche de chaque verre.
+        // Un second flou SERRÉ (0,006·grandCôté = 5,4 px au viseur) survit sur une
+        // spéculaire : pic de 0,35 à 0,98 pour 5 px, de 0,07 à 0,46 pour 2 px. Les
+        // deux sont réunis par `CIMaximumCompositing` — une union, donc bornée à 1
+        // et conforme à R1, jamais une addition.
+        //
+        // FACTEUR D'ÉCRAN. Le coefficient 1,6 donnait 0,064 pour un `haze` de 0,04
+        // (Helios, Trioplan), c'est-à-dire un delta MAXIMAL de 3,20 % sur un fond
+        // à 0,50 et de 0,64 % sur une haute lumière à 0,90 : sous le seuil de
+        // perception. Coefficient 3,0, plafond inchangé à 0,50 — le plafond ne
+        // mord que sur le Dream Lens, l'ordre des neuf verres est donc préservé :
+        //   helios 0,120 · trioplan 0,120 · biotar 0,240 · angénieux 0,300 ·
+        //   noctilux 0,420 · takumar 0,480 · dream 0,500 (écrêté de 0,900)
+        // Delta d'écran = facteur · carte · (1 − fond). Autour d'une spéculaire de
+        // 5 px sur un fond à 0,50, Helios passe de 0,04-0,35 % à 2,1-5,9 %.
+        //
+        // DIVERGENCE CONNUE, à trancher dans Lens.swift et NON ici : `haze` vaut 0
+        // chez le Summicron et le Noct-Nikkor, mais leur fiche affiche un trait
+        // « Halo / glow » de 0,15 et de 0,55. Ce n'est donc pas « une absence de
+        // voile revendiquée » comme l'affirmait ce commentaire — c'est le moteur
+        // qui rend zéro là où la carte promet 0,55. Le classement des sept autres
+        // diverge aussi du trait affiché (Trioplan : trait 0,45 pour haze 0,04 ;
+        // Takumar : trait 0,35 pour haze 0,16).
         // ─────────────────────────────────────────────────────────────────────
         if p.haze > 0.01 {
             let hautesDouces = rampe(
@@ -400,15 +541,26 @@ enum MoteurOptique {
                 ]),
                 bas: 0, haut: 0.28)
 
-            let voile = hautesDouces
+            let voileLarge = hautesDouces
                 .clampedToExtent()
                 .applyingFilter("CIGaussianBlur", parameters: [
                     "inputRadius": Float(grandCote * 0.035)
                 ])
                 .cropped(to: cadre)
 
+            let voileSerre = hautesDouces
+                .clampedToExtent()
+                .applyingFilter("CIGaussianBlur", parameters: [
+                    "inputRadius": Float(grandCote * 0.006)
+                ])
+                .cropped(to: cadre)
+
+            let voile = voileLarge.applyingFilter("CIMaximumCompositing", parameters: [
+                "inputBackgroundImage": voileSerre
+            ])
+
             fond = ecran(fond, avec: attenuer(voile,
-                                              facteur: min(0.5, CGFloat(p.haze) * k * 1.6)))
+                                              facteur: min(0.5, CGFloat(p.haze) * k * 3.0)))
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -418,7 +570,11 @@ enum MoteurOptique {
 
         if disquesAutorises {
             let pointsDetectes = detecterPoints(base, cadre: cadre, grandCote: grandCote)
-            let porte = porteDeCouverture(pointsDetectes, cadre: cadre)
+            // La porte mesure la couverture APRÈS dilatation : elle a donc besoin du
+            // rayon du disque, qui est une propriété de l'objectif et de l'intensité.
+            let porte = porteDeCouverture(pointsDetectes,
+                                          rayonDisque: grandCote * rayonDisqueRelatif(p, k: k),
+                                          cadre: cadre)
 
             if porte >= 0.02 {
                 image = ecran(fond, avec: attenuer(
@@ -428,7 +584,7 @@ enum MoteurOptique {
                                   k: k,
                                   cadre: cadre,
                                   grandCote: grandCote,
-                                  petitCote: petitCote,
+                                  refVignettage: refVignettage,
                                   centre: centre),
                     facteur: (0.5 + 0.5 * k) * CGFloat(p.opacity) * porte))
             }
@@ -442,7 +598,7 @@ enum MoteurOptique {
         if sig.vignettage > 0.01 {
             image = image.applyingFilter("CIVignetteEffect", parameters: [
                 "inputCenter": centre,
-                "inputRadius": Float(petitCote * 0.62),
+                "inputRadius": Float(refVignettage * 0.62),
                 "inputIntensity": Float(sig.vignettage * k * 0.85),
                 "inputFalloff": Float(0.60)
             ])
@@ -470,15 +626,43 @@ enum MoteurOptique {
             // L'Angénieux étant le seul verre à `grain` = 1, il était le seul
             // objectif touché — viseur entièrement en neige.
             //
-            // 0,14 donne un voile dans [0,43 ; 0,57] : une texture qui se voit à
-            // 100 % sans jamais menacer l'image. Le grain d'un tirage argentique
-            // est une modulation de quelques pour cent, pas un calque opaque.
-            let oscillation = CGFloat(p.grain) * k * 0.14
+            // 0,24 donne un voile dans [0,38 ; 0,62]. Écart-type du RÉSULTAT après
+            // `CISoftLightBlendMode` (Monte-Carlo, 600 000 tirages) : 1,65 % sur un
+            // fond à 0,20 · 1,83 % à 0,50 (4,7 niveaux sur 255) · 1,03 % à 0,80.
+            // C'est l'ordre de grandeur d'un tirage argentique — une modulation de
+            // quelques pour cent, pas un calque opaque. Le réglage précédent, 0,14,
+            // donnait 0,96 / 1,07 / 0,60 % : lisible, mais tout juste au-dessus du
+            // bruit de quantification une fois le fichier réduit à l'écran.
+            let oscillation = CGFloat(p.grain) * k * 0.24
             // Un tiers par canal, puisque les trois sont sommés : c'est ce
             // facteur 3 qui manquait.
             let parCanal = oscillation / 3
             let socle = (1 - oscillation) / 2
+            // ÉCHELLE DU GRAIN (R3), et c'est la seconde panne de cet étage.
+            // `CIRandomGenerator` tire une valeur par pixel de la grille de
+            // travail : la cellule de grain mesurait 1 px dans les TROIS cadres,
+            // soit 0,1111 % du grand côté au viseur, 0,0833 % à l'aperçu et
+            // 0,0312 % à l'export. Le grain de l'Angénieux était donc 3,56 fois
+            // plus fin dans le fichier que dans le viseur où l'auteur le règle ;
+            // pire, en ramenant l'export à la taille d'affichage le bruit blanc se
+            // moyennait sur 3,56² = 12,7 px et son écart-type était divisé par
+            // 3,56 : 1,07 % → 0,30 %, soit 0,77 niveau sur 255, sous le bruit de
+            // quantification. « Du grain au viseur, aucun dans la photo ».
+            //
+            // Le bruit est donc tiré sur la grille fixe `coteGrain` puis agrandi
+            // au cadre : la cellule vaut 1,000 px au viseur, 1,333 px à l'aperçu et
+            // 3,556 px à l'export — 0,1111 % du grand côté dans les trois cas.
+            // `samplingNearest()` avant l'agrandissement est obligatoire : une
+            // interpolation bilinéaire corrélerait les voisins et diviserait
+            // l'écart-type par ≈ 1,5 à l'export sans le toucher au viseur, ce qui
+            // recréerait exactement l'écart qu'on vient de supprimer. Le plancher à
+            // 1 est une nécessité physique — une cellule ne peut pas être plus
+            // petite qu'un pixel — et ne mord que sur une source de moins de 900 px
+            // importée dans le studio.
+            let echelleGrain = max(1, grandCote / Self.coteGrain)
             let voileGrain = bruit
+                .samplingNearest()
+                .transformed(by: CGAffineTransform(scaleX: echelleGrain, y: echelleGrain))
                 .cropped(to: cadre)
                 // Désaturation puis compression autour de 0,5 : un bruit coloré
                 // virerait la photo au bruit vidéo, et un bruit non recentré
@@ -513,18 +697,92 @@ enum MoteurOptique {
     /// travaillait sur ce faux. D'où les liserés arc-en-ciel sur la silhouette et
     /// les traînées sur le sable.
     ///
-    /// Le critère est ici COMPOSÉ de quatre termes, chacun ramené dans [0, 1] par
+    /// Le critère est ici COMPOSÉ de cinq termes, chacun ramené dans [0, 1] par
     /// une rampe et MULTIPLIÉS entre eux — multiplier ne peut que retirer des
-    /// candidats, jamais en inventer, et l'alpha reste borné à 1 (R1).
+    /// candidats, jamais en inventer, et l'alpha reste borné à 1 (R1). Ils mesurent
+    /// cinq grandeurs indépendantes : la luminance (T1), l'entourage (T2), le
+    /// contraste local multi-échelle (T3), l'ambiance de la scène (T4) et la
+    /// COMPACITÉ (T5).
     ///
     /// La carte est calculée sur l'image NUE, avant toute teinte : « cette source
     /// est-elle isolée ? » est une propriété de la PHOTO, pas du verre choisi. La
     /// tentative précédente indexait le rayon d'entourage sur le rayon du disque
     /// à dessiner, ce qui est une inversion de causalité : le Summicron aurait
     /// détecté des points que le Dream Lens aurait rejetés.
+    ///
+    /// ÉCHELLE D'ANALYSE NORMALISÉE (§ `coteDetection`). L'analyse est menée sur une
+    /// réduction du cadre à 900 px de grand côté, puis la carte obtenue est
+    /// réagrandie au cadre de travail. Sans cela, T1 — un seuil de luminance
+    /// ABSOLUE — mesurait la taille du tampon et non la scène : le fichier 3200 px
+    /// détectait des sources trois fois plus petites que le viseur 900 px, d'où
+    /// « des disques dans la photo, aucun au viseur ».
+    ///
+    /// Le réagrandissement de la carte grossit la graine d'un facteur
+    /// `grandCote`/900 : 1,00 px au viseur, 1,33 px à l'aperçu, 3,56 px à l'export.
+    /// Le rayon du disque étant lui aussi proportionnel au grand côté, le RAPPORT
+    /// graine/rayon ne dépend pas du cadre : l'élargissement du disque vaut
+    /// exactement +6,7 % dans les TROIS cadres (Helios à k = 0,75 — viseur 7,46 →
+    /// 7,96 px, aperçu 9,95 → 10,62 px, export 26,53 → 28,31 px). R3 est donc
+    /// préservée, et c'est à comparer à des disques présents ou absents selon le
+    /// cadre, ce qui était l'état d'avant.
+    ///
+    /// L'analyse coûte aussi 45 fois moins cher à l'export : les deux morphologies
+    /// et la gaussienne s'exécutent sur 674×900 = 606 600 px avec des rayons de
+    /// 8,10 et 45,0 px, au lieu de 2400×3200 = 7 680 000 px avec des rayons de 28,8
+    /// et 160 px.
     private static func detecterPoints(_ base: CIImage,
                                        cadre: CGRect,
                                        grandCote: CGFloat) -> CIImage {
+
+        let facteur = min(1, Self.coteDetection / grandCote)
+
+        // Cadre déjà au plus égal à la grille de référence (viseur, ou petite image
+        // importée) : réduire puis réagrandir n'ajouterait que du flou.
+        guard facteur < 0.999 else {
+            return carteDePoints(base, cadre: cadre, grandCote: grandCote)
+        }
+
+        // R2 : filtre à support spatial, donc clamp avant et recadrage après. Le
+        // support de Lanczos vaut 3/facteur px source ; sans le clamp, le pourtour
+        // de la carte serait assombri par le « noir transparent » de l'extérieur,
+        // ce qui est exactement le piège que R2 décrit pour l'érosion.
+        let cadreAnalyse = CGRect(x: cadre.origin.x * facteur,
+                                  y: cadre.origin.y * facteur,
+                                  width: cadre.width * facteur,
+                                  height: cadre.height * facteur)
+        let reduite = base
+            .clampedToExtent()
+            .applyingFilter("CILanczosScaleTransform", parameters: [
+                "inputScale": Float(facteur),
+                "inputAspectRatio": Float(1)
+            ])
+            .cropped(to: cadreAnalyse)
+
+        // Réagrandissement en BILINÉAIRE (transformation affine simple) et non en
+        // Lanczos : à l'agrandissement, les lobes négatifs de Lanczos produiraient
+        // un dépassement sous zéro et au-dessus de un autour de chaque point, que
+        // `CIMultiplyCompositing` propagerait dans la graine. Une interpolation
+        // bilinéaire d'un agrandissement ne peut pas dépasser les bornes de ses
+        // voisins, donc la carte reste dans [0, 1] comme le veut R1.
+        // Le clamp avant l'agrandissement n'est pas cosmétique : l'arrondi de
+        // `cadreAnalyse` peut laisser l'étendue réagrandie un pixel en deçà de
+        // `cadre`, et `CIAreaAverage` de `porteDeCouverture` moyennerait alors du
+        // noir transparent sur ce liseré.
+        return carteDePoints(reduite,
+                             cadre: cadreAnalyse,
+                             grandCote: grandCote * facteur)
+            .clampedToExtent()
+            .transformed(by: CGAffineTransform(scaleX: 1 / facteur, y: 1 / facteur))
+            .cropped(to: cadre)
+    }
+
+    /// Le critère proprement dit, à l'échelle où on le lui donne. Toujours appelé
+    /// via `detecterPoints`, qui garantit que `grandCote` vaut au plus
+    /// `coteDetection` — c'est cette garantie qui rend les cinq seuils absolus
+    /// ci-dessous comparables d'un cadre à l'autre.
+    private static func carteDePoints(_ base: CIImage,
+                                      cadre: CGRect,
+                                      grandCote: CGFloat) -> CIImage {
 
         // Saturation nulle : un rouge saturé ne doit pas compter comme une haute
         // lumière au seul motif que son canal rouge est écrêté.
@@ -534,23 +792,86 @@ enum MoteurOptique {
             "inputContrast": Float(1)
         ])
 
-        // Rayon d'analyse, relatif au cadre (R3) : 10,8 px à 1200, 28,8 px à 3200.
-        let rayonAnalyse = Float(max(3, grandCote * 0.009))
+        // Rayon d'analyse, relatif au cadre (R3). Depuis la normalisation de
+        // l'échelle d'analyse, `grandCote` vaut ici 900 dans les TROIS cadres —
+        // viseur, aperçu et export — donc le rayon vaut 8,10 px partout, et non
+        // plus 8,10 / 10,8 / 28,8 px selon le tampon. Le plancher à 3 px ne mord
+        // qu'en dessous de 333 px de grand côté, cas d'une petite image importée.
+        let rayonAnalyse = max(3, grandCote * 0.009)
 
-        let erosion = luminance
-            .clampedToExtent()
-            .applyingFilter("CIMorphologyMinimum", parameters: ["inputRadius": rayonAnalyse])
-            .cropped(to: cadre)
+        // ─────────────────────────────────────────────────────────────────────
+        // MORPHOLOGIE MULTI-ÉCHELLE, et c'est la correction d'une panne totale.
+        //
+        // Le code n'analysait qu'à UNE échelle, rayonAnalyse = 8,10 px. T2 (rampe
+        // décroissante sur l'érosion à 8,10 px) et T3 (chapeau à 8,10 px) formaient
+        // alors un filtre passe-bande de TAILLE beaucoup plus étroit que ce que le
+        // commentaire supposait : pour être détectée, une source devait voir sa
+        // luminance s'effondrer en MOINS de 8,10 px. Or c'est exactement ce qu'une
+        // vraie source lumineuse ne fait pas — elle a un halo. Dès que le cœur
+        // écrêté dépasse rayonAnalyse, l'ouverture CONSERVE la source (chapeau ≡ 0)
+        // ET l'érosion vaut 1 en son centre : T2 = T3 = 0, produit exactement nul.
+        //
+        // Balayage mesuré (cœur R écrêté + halo gaussien σ, fond nocturne 0,05,
+        // cadre 674×900), MAX du produit des quatre termes de l'ancien critère :
+        //     R = 1 px : σ=1 → 1,000 · σ=4 → 1,000 · σ=8 → 0,017 · σ=16 → 0,000
+        //     R = 3 px : σ=4 → 0,989 · σ=8 → 0,000
+        //     R = 5 px : σ=4 → 0,176 · σ=8 → 0,000
+        //     R = 8 px : σ=1 → 0,539 · σ=2 → 0,000
+        //     R = 10 px et au-delà : 0,000 pour TOUT σ
+        // Sur une RUE DE NUIT complète : lampadaire proche (cœur 10 px, σ=25) →
+        // T1 = 1,000 mais érosion = 1,000 donc T2 = 0 et chapeau = 0,000 donc
+        // T3 = 0, produit 0,00000 ; lampadaire lointain (cœur 3 px, σ=5) → produit
+        // 0,00000. Seules passaient les ampoules de guirlande (cœur 2 px, σ=3).
+        // L'étage C ne s'allumait JAMAIS sur un vrai lampadaire — c'est-à-dire sur
+        // la seule scène qui justifie son existence.
+        //
+        // Corrigé par l'opérateur canonique « source claire de taille QUELCONQUE
+        // sur fond sombre » : le chapeau haut-de-forme est pris à TROIS échelles,
+        // 1×, 3× et 6× rayonAnalyse (8,10 / 24,3 / 48,6 px), et on garde le
+        // MAXIMUM. Un chapeau reste ≡ 0 le long d'un demi-plan à toutes les
+        // échelles, donc le verrou contre les bords francs est intact ; mais un
+        // cœur large ou un halo étendu, invisible à 8,10 px, apparaît à 48,6 px.
+        // Le même balayage donne maintenant 1,000 pour le lampadaire proche comme
+        // pour le lointain comme pour la guirlande.
+        //
+        // COÛT — c'est ce qui impose la PYRAMIDE. Une morphologie par disque de
+        // 48,6 px sur 606 600 px serait ~7 400 taps par pixel, hors budget d'une
+        // trame de viseur. Un disque de rayon r sur une image réduite d'un facteur
+        // f est l'équivalent d'un disque de rayon f·r sur l'image pleine, pour f²
+        // fois moins de pixels ET le même nombre de taps. Les trois étages réunis
+        // coûtent donc 1 + 1/9 + 1/36 = 1,14 fois l'étage unique d'avant. Ce qui se
+        // perd à la réduction est la résolution du VOISINAGE, qui est précisément
+        // ce que ces deux grandes échelles mesurent.
+        let etage1 = etageMorphologique(luminance, rayon: rayonAnalyse, facteur: 1, cadre: cadre)
+        let etage3 = etageMorphologique(luminance, rayon: rayonAnalyse, facteur: 3, cadre: cadre)
+        let etage6 = etageMorphologique(luminance, rayon: rayonAnalyse, facteur: 6, cadre: cadre)
 
-        let ouverture = erosion
-            .clampedToExtent()
-            .applyingFilter("CIMorphologyMaximum", parameters: ["inputRadius": rayonAnalyse])
-            .cropped(to: cadre)
+        // L'érosion RETENUE est celle de la plus grande échelle : « il y a du sombre
+        // à moins de 48,6 px », et non plus « à moins de 8,10 px ».
+        let erosion = etage6.erosion
 
-        // Chapeau haut-de-forme blanc : luminance − ouverture.
-        let chapeau = luminance.applyingFilter("CIDifferenceBlendMode", parameters: [
-            "inputBackgroundImage": ouverture
-        ])
+        // Chapeau haut-de-forme blanc : luminance − ouverture, réuni par
+        // `CIMaximumCompositing` (union bornée à 1, jamais une addition — R1).
+        // L'ouverture reste ≤ luminance à chaque échelle, donc chaque différence
+        // est une soustraction exacte (R4). Le réagrandissement bilinéaire des deux
+        // grandes échelles ne peut pas dépasser les bornes de ses voisins ; là où il
+        // rendrait malgré tout l'ouverture supérieure à la luminance — un trait
+        // SOMBRE et fin — la valeur absolue de la différence devient positive, mais
+        // T1 rejette ce pixel puisque sa luminance est basse.
+        let chapeau = luminance
+            .applyingFilter("CIDifferenceBlendMode", parameters: [
+                "inputBackgroundImage": etage1.ouverture
+            ])
+            .applyingFilter("CIMaximumCompositing", parameters: [
+                "inputBackgroundImage": luminance.applyingFilter("CIDifferenceBlendMode", parameters: [
+                    "inputBackgroundImage": etage3.ouverture
+                ])
+            ])
+            .applyingFilter("CIMaximumCompositing", parameters: [
+                "inputBackgroundImage": luminance.applyingFilter("CIDifferenceBlendMode", parameters: [
+                    "inputBackgroundImage": etage6.ouverture
+                ])
+            ])
 
         // T1 — LUMINANCE ABSOLUE. 0,88 et non 0,58 : une source ponctuelle sature
         // le capteur. Repères sRGB : ciel bleu franc ≈ 0,63, sable au soleil
@@ -565,7 +886,19 @@ enum MoteurOptique {
         // sombre alentour ». C'est ce qui distingue un POINT de lumière d'une
         // SURFACE lumineuse — et un vrai objectif ne fabrique un disque que pour
         // une source entourée d'ombre.
-        let t2 = rampe(erosion, bas: 0.45, haut: 0.12)
+        //
+        // DEUX changements, tous deux mesurés. L'érosion est prise à 48,6 px et non
+        // plus à 8,10 px : le seuil analytique de l'ancienne version était
+        // σ_max = (rayonAnalyse − R)/1,264, soit 6,41 px de halo pour un point et
+        // 4,83 px pour un cœur de 2 px — au-delà, T2 = 0 exactement. Un lampadaire
+        // proche (cœur 10 px, σ=25) donnait une érosion de 1,000, donc T2 = 0. À
+        // 48,6 px la même source donne 0,304, donc T2 = 1,000.
+        // Et la rampe est relâchée de (0,45 → 0,12) à (0,80 → 0,35) : à grande
+        // échelle il n'est plus nécessaire que le voisinage soit NOIR, il suffit
+        // qu'il soit plus sombre que la source. Repères sRGB mesurés : sable au
+        // soleil 0,75 → T2 = 0,111 ; ciel bleu 0,63 → 0,378 ; mur d'intérieur 0,45
+        // → 0,778 ; rue de nuit 0,05 → 1,000.
+        let t2 = rampe(erosion, bas: 0.80, haut: 0.35)
 
         // T3 — CONTRASTE LOCAL. Chapeau haut-de-forme, et surtout PAS le gradient
         // morphologique (dilatation − érosion) : sur un bord franc, la silhouette
@@ -588,82 +921,318 @@ enum MoteurOptique {
         // mèches de cheveux, entre les doigts, entre le bras et le torse. Sur ces
         // lamelles, les trois premiers termes passent tous : T1 parce qu'un ciel
         // ou une mer en plein soleil sont ÉCRÊTÉS (t1 = 1, et non 0,18 comme on
-        // pouvait le croire), T2 parce que l'érosion à 10,8 px trouve les cheveux
-        // sombres tout à côté, T3 à pleine amplitude. La graine contenait donc un
-        // liseré de points TOUT LE LONG du contour du sujet, que C3 dilatait et
-        // que C4 creusait en anneaux : les liserés de la capture incriminée. Le
-        // garde-fou de couverture ne rattrapait rien, ces lamelles pesant moins de
-        // 0,35 % du cadre. C'est T4 qui ferme ce trou.
+        // pouvait le croire), T2 parce que l'érosion trouve les cheveux sombres
+        // tout à côté, T3 à pleine amplitude. La graine contient alors un liseré de
+        // points TOUT LE LONG du contour du sujet, que C3 dilate et que C4 creuse
+        // en anneaux : les liserés de la capture incriminée. Le garde-fou de
+        // couverture ne rattrape rien, ces lamelles pesant moins de 0,35 % du cadre.
+        //
+        // CE N'EST PAS T4 QUI FERME CE TROU, contrairement à ce qu'affirmait ce
+        // commentaire. Il prétendait que la moyenne locale vaut ≈ 0,6 entre les
+        // mèches. Mesurée sur la scène décrite — cheveux à 0,10, lamelles de ciel
+        // de 3 px à 0,99 tous les 14 px, cadre 674×900 — elle vaut 0,291, que le
+        // flou soit pris à σ = rayon (45 px) ou à σ = rayon/3 (15 px). L'ancien T4
+        // laissait donc passer 0,460 d'amplitude, avec T1 = T2 = T3 = 1,000. C'est
+        // très exactement le liseré reproché à la capture de plage. Le trou est
+        // fermé par T5, ci-dessous, qui mesure la bonne grandeur : l'ALLONGEMENT.
         let t3 = rampe(chapeau, bas: 0.20, haut: 0.50)
 
         // T4 — VOISINAGE SOMBRE À GRANDE ÉCHELLE. C'est la traduction littérale du
         // principe physique : une bulle n'existe que là où tout le pourtour est
-        // noir. L'érosion de T2 ne regarde qu'à 10,8 px et se laisse abuser par un
-        // creux local ; la MOYENNE locale à grande échelle, elle, ne se laisse pas
-        // abuser — entre deux mèches de cheveux elle vaut ≈ 0,6 (ciel + cheveux),
-        // alors qu'autour d'un lampadaire dans une rue nocturne elle vaut ≈ 0,10.
-        // Rampe DÉCROISSANTE : il faut que tout le quartier soit sombre.
+        // sombre. L'érosion de T2 est ponctuelle et se laisse abuser par un creux
+        // local ; la moyenne à grande échelle, elle, décrit la SCÈNE.
         //
-        // C'est ce terme qui sépare proprement les deux scènes de référence :
-        // plage en plein jour → ambiance 0,5 à 0,7 → t4 ≈ 0 partout → étage C
-        // VIDE, ce qui est le comportement CORRECT ; rue de nuit → ambiance 0,08 à
-        // 0,15 → t4 = 1 → disques intacts ; portrait en intérieur → t4 ≈ 0,3 à 0,6
-        // selon la pièce, et une ampoule dans le champ reste détectée.
-        let ambiance = luminance
+        // DEUX FAUTES CORRIGÉES ICI, toutes deux mesurées.
+        //
+        // (1) LA MOYENNE ÉTAIT PRISE SUR LA LUMINANCE NUE, donc une source
+        //     relevait elle-même sa propre ambiance : plus elle était brillante et
+        //     large, plus elle abaissait son propre T4. Mesuré sur la rue de nuit,
+        //     lampadaire proche : ambiance 0,358 et T4 = 0,222 — un plafond de 22 %
+        //     d'amplitude imposé au voisinage de la source la plus brillante du
+        //     cadre, uniquement parce qu'elle brille. L'ambiance est désormais
+        //     calculée sur l'ÉROSION à 48,6 px, qui a déjà retiré la source : le
+        //     même lampadaire donne 0,06 et T4 = 1,000.
+        //
+        // (2) LA RAMPE (0,42 → 0,14) ÉTEIGNAIT TOUT INTÉRIEUR. Elle exigeait une
+        //     ambiance sous 0,42 sRGB, c'est-à-dire plus sombre qu'un mur peint, un
+        //     plafond blanc ou une pièce éclairée. Mesuré sur la scène de la
+        //     capture — couloir, murs 0,45, plafond 0,62, spot au plafond (cœur
+        //     5 px, σ=12), fenêtre 0,96, cadre 674×900 — l'étage C rendait un MAX
+        //     de 0,00000 et une couverture de 0,0000 % : rigoureusement vide, le
+        //     spot étant rejeté DEUX fois, par T2 et par T4.
+        //     La rampe est déplacée à (0,62 → 0,20). Valeurs mesurées avec
+        //     l'ambiance corrigée : rue de nuit 0,06 → T4 = 1,000 ; pièce du soir
+        //     0,30 → 0,770 ; couloir clair 0,61 → 0,024 ; ciel de plage 0,63 →
+        //     0,000 ; écume 0,75 → 0,000 ; mer au soleil 0,58 → 0,100.
+        //
+        // LIMITE ASSUMÉE ET CHIFFRÉE : sur le produit complet, un spot dans une
+        // pièce du soir passe à 0,773 (il était à 0,000), mais un spot dans un
+        // couloir aux murs et plafond CLAIRS reste à 0,005. C'est délibéré et non
+        // une négligence : l'ambiance d'un tel couloir (0,61) est celle d'une mer
+        // ensoleillée (0,58), et aucune mesure de voisinage ne peut les séparer.
+        // Entre « pas de disques dans un couloir clair » et « des anneaux fantômes
+        // sur la mer », R5 tranche : on garde le premier.
+        //
+        // PRIX PAYÉ, mesuré et jugé acceptable : une mer scintillante au soleil
+        // passe de 0,0000 % de couverture de graine à 0,0299 %, avec un produit
+        // MAXIMAL de 0,034. Screené, cela vaut 0,034·(1 − 0,58) = 1,4 % de delta sur
+        // l'eau — sous le seuil de perception, et treize fois moins que le 0,460
+        // d'amplitude que l'ancien détecteur posait sur les lamelles de cheveux.
+        let ambiance = erosion
             .clampedToExtent()
             .applyingFilter("CIGaussianBlur", parameters: [
                 "inputRadius": Float(max(8, grandCote * 0.05))
             ])
             .cropped(to: cadre)
-        let t4 = rampe(ambiance, bas: 0.42, haut: 0.14)
+        let t4 = rampe(ambiance, bas: 0.62, haut: 0.20)
+
+        // T5 — COMPACITÉ. Le critère qui manquait, et le seul qui ferme réellement
+        // l'angle mort de T3 décrit plus haut : une lamelle de ciel entre deux
+        // mèches est une structure ALLONGÉE, un disque de bokeh est COMPACT. Ni la
+        // luminance, ni l'entourage, ni l'ambiance ne distinguent les deux — seule
+        // la forme le fait.
+        //
+        // L'ouverture par un SEGMENT horizontal supprime toute structure plus
+        // étroite que le segment dans la direction horizontale, et la laisse
+        // intacte si elle est plus large ; idem verticalement. On prend le MINIMUM
+        // des deux (`CIMinimumCompositing` : une intersection, bornée, jamais une
+        // addition — R1), puis la différence avec la luminance. Cette différence
+        // est grande sur une structure fine dans AU MOINS une direction, et nulle
+        // sur une tache compacte ou sur une grande plage claire. Les deux
+        // ouvertures sont ≤ luminance, donc la différence est encore une
+        // soustraction exacte (R4).
+        //
+        // Longueur du segment : 0,6·rayonAnalyse arrondi au nombre IMPAIR
+        // supérieur, comme l'exige `CIMorphologyRectangle*`, soit 5 px sur la
+        // grille d'analyse normalisée à 900 px. Elle sépare mesurément :
+        //   lamelle de ciel de 3 px entre des cheveux à 0,10 → différence 0,89 →
+        //   T5 = 0,000 ; même lamelle au bord du ciel ouvert → 0,36 → 0,000 ;
+        //   ampoule de guirlande (cœur 2 px, σ=3) → 0,00 → 1,000 ; lampadaire →
+        //   1,000 ; grande plage claire → 1,000 (rejetée ailleurs, par T2 et T3).
+        // Sur la scène de plage complète, la couverture de la graine tombe de
+        // 1,0276 % à 0,0393 % — vingt-six fois moins de faux positifs le long du
+        // contour du sujet.
+        //
+        // LIMITE ASSUMÉE : le segment étant axial, une lamelle DIAGONALE plus large
+        // que 5 px sur la grille d'analyse survit. `CIMorphologyRectangle*` ne sait
+        // pas faire d'élément structurant oblique ; l'alternative — quatre
+        // ouvertures de plus — ne tient pas dans le budget d'une trame de viseur.
+        let coteSegment = max(3, Int((rayonAnalyse * 0.6).rounded(.up)) | 1)
+        let compacite = ouvertureRectangle(luminance, largeur: coteSegment, hauteur: 1, cadre: cadre)
+            .applyingFilter("CIMinimumCompositing", parameters: [
+                "inputBackgroundImage": ouvertureRectangle(luminance,
+                                                           largeur: 1,
+                                                           hauteur: coteSegment,
+                                                           cadre: cadre)
+            ])
+        let allongement = luminance.applyingFilter("CIDifferenceBlendMode", parameters: [
+            "inputBackgroundImage": compacite
+        ])
+        let t5 = rampe(allongement, bas: 0.35, haut: 0.10)
 
         return t1
             .applyingFilter("CIMultiplyCompositing", parameters: ["inputBackgroundImage": t2])
             .applyingFilter("CIMultiplyCompositing", parameters: ["inputBackgroundImage": t3])
             .applyingFilter("CIMultiplyCompositing", parameters: ["inputBackgroundImage": t4])
+            .applyingFilter("CIMultiplyCompositing", parameters: ["inputBackgroundImage": t5])
+    }
+
+    /// Érosion et ouverture morphologiques à l'échelle `facteur`, calculées sur une
+    /// image réduite d'autant puis réagrandies au cadre.
+    ///
+    /// Un disque de rayon `rayon` sur une image réduite d'un facteur f est
+    /// l'équivalent d'un disque de rayon f·`rayon` sur l'image pleine, pour f² fois
+    /// moins de pixels ET le même nombre de taps par pixel : c'est ce qui rend
+    /// l'analyse à 24,3 et 48,6 px abordable dans une trame de viseur.
+    ///
+    /// La réduction est une transformation AFFINE (bilinéaire) et non un Lanczos :
+    /// les lobes négatifs de Lanczos feraient dépasser l'ouverture au-dessus de la
+    /// luminance le long des bords clairs, donc un faux chapeau — précisément le
+    /// générateur de liserés que R4 interdit. Une bilinéaire ne peut pas dépasser
+    /// les bornes de ses voisins.
+    ///
+    /// Réduire puis réagrandir d'un même facteur autour de l'origine est une
+    /// composition de mises à l'échelle : la position est restituée exactement,
+    /// aucune translation n'est nécessaire, quel que soit `cadre.origin`.
+    private static func etageMorphologique(_ luminance: CIImage,
+                                           rayon: CGFloat,
+                                           facteur: CGFloat,
+                                           cadre: CGRect) -> (erosion: CIImage, ouverture: CIImage) {
+
+        let r = Float(max(1, rayon))
+
+        // R2 : clamp avant, recadrage après, à CHAQUE étage — sans le clamp,
+        // l'érosion verrait une bordure de noir transparent tout autour du cadre et
+        // toute la périphérie passerait le test d'entourage.
+        func erodeEtOuvre(_ image: CIImage, dans zone: CGRect) -> (erosion: CIImage, ouverture: CIImage) {
+            let ero = image
+                .clampedToExtent()
+                .applyingFilter("CIMorphologyMinimum", parameters: ["inputRadius": r])
+                .cropped(to: zone)
+            let ouv = ero
+                .clampedToExtent()
+                .applyingFilter("CIMorphologyMaximum", parameters: ["inputRadius": r])
+                .cropped(to: zone)
+            return (ero, ouv)
+        }
+
+        guard facteur > 1.001 else {
+            let (ero, ouv) = erodeEtOuvre(luminance, dans: cadre)
+            return (ero, ouv)
+        }
+
+        let reduite = luminance
+            .cropped(to: cadre)
+            .transformed(by: CGAffineTransform(scaleX: 1 / facteur, y: 1 / facteur))
+        let cadreReduit = reduite.extent
+
+        // Cadre devenu trop petit pour que la morphologie ait un sens : on retombe
+        // sur l'échelle unité plutôt que de rendre une image dégénérée (R5).
+        guard cadreReduit.width >= 4 * CGFloat(r), cadreReduit.height >= 4 * CGFloat(r) else {
+            let (ero, ouv) = erodeEtOuvre(luminance, dans: cadre)
+            return (ero, ouv)
+        }
+
+        let (ero, ouv) = erodeEtOuvre(reduite, dans: cadreReduit)
+        let agrandissement = CGAffineTransform(scaleX: facteur, y: facteur)
+        return (ero.clampedToExtent().transformed(by: agrandissement).cropped(to: cadre),
+                ouv.clampedToExtent().transformed(by: agrandissement).cropped(to: cadre))
+    }
+
+    /// Ouverture morphologique par un élément structurant RECTANGULAIRE, clampée
+    /// puis recadrée (R2). `largeur` et `hauteur` doivent être impairs, ce que
+    /// `CIMorphologyRectangle*` exige.
+    private static func ouvertureRectangle(_ image: CIImage,
+                                           largeur: Int,
+                                           hauteur: Int,
+                                           cadre: CGRect) -> CIImage {
+        image
+            .clampedToExtent()
+            .applyingFilter("CIMorphologyRectangleMinimum", parameters: [
+                "inputWidth": Float(largeur),
+                "inputHeight": Float(hauteur)
+            ])
+            .clampedToExtent()
+            .applyingFilter("CIMorphologyRectangleMaximum", parameters: [
+                "inputWidth": Float(largeur),
+                "inputHeight": Float(hauteur)
+            ])
+            .cropped(to: cadre)
     }
 
     /// Garde-fou de COUVERTURE : la porte qui rend l'étage C auto-régulé.
     ///
-    /// Renvoie 1 quand les points détectés couvrent au plus 0,25 % du cadre,
-    /// 0 au-delà de 1,2 %, avec une rampe continue entre les deux — pas de
+    /// Renvoie 1 tant que les disques réellement dessinés couvrent au plus 20 % du
+    /// cadre, 0 au-delà de 45 %, avec une rampe continue entre les deux — pas de
     /// basculement visible en bougeant le curseur.
     ///
-    /// C'EST UN GARDE-FOU, PAS LE MÉCANISME PRINCIPAL, et c'est la leçon de la
-    /// capture de plage. L'ancien réglage (0,35 % à 1,8 %) laissait un large
-    /// régime INTERMÉDIAIRE, et c'est précisément là que tombait la photo : le
-    /// scintillement d'une mer au soleil produisait ≈ 0,5 à 1,2 % de couverture,
-    /// donc une porte à ≈ 0,7, donc l'étage C appliqué aux deux tiers — les
-    /// « anneaux fantômes flottant sur la mer ». Une porte qui mesure une SURFACE
-    /// ne mesure ni un NOMBRE ni une ISOLATION : une seule grosse réflexion de
-    /// soleil dont T3 ne retient que le pourtour donne une couverture minuscule et
-    /// laisse la porte grande ouverte.
+    /// C'EST UN GARDE-FOU, PAS LE MÉCANISME PRINCIPAL. Une porte qui mesure une
+    /// SURFACE ne mesure ni un NOMBRE ni une ISOLATION : la cause des « anneaux
+    /// fantômes flottant sur la mer » est traitée en amont par T2, T4 et T5, pas
+    /// ici. La porte ne rattrape que le cas résiduel « le calque mange l'image ».
     ///
-    /// La cause est donc traitée en amont, par T4 : sur une mer éclairée
-    /// l'ambiance locale vaut 0,5 à 0,7, t4 ≈ 0, et la couverture mesurée tombe
-    /// d'elle-même à presque rien. La porte n'a plus qu'à rattraper les cas
-    /// résiduels, d'où une rampe COURTE : ouverte à fond sous 0,25 %, franchement
-    /// fermée à 1,2 %. Avec le gain 32 en aval, la valeur de panne (0,031) reste
-    /// très au-dessus du seuil de fermeture, donc R5 est préservé.
-    private static func porteDeCouverture(_ points: CIImage, cadre: CGRect) -> CGFloat {
-        let moyenne = points.applyingFilter("CIAreaAverage", parameters: [
-            "inputExtent": CIVector(x: cadre.origin.x,
-                                    y: cadre.origin.y,
-                                    z: cadre.width,
-                                    w: cadre.height)
+    /// CE QUE MESURAIT LA VERSION PRÉCÉDENTE, ET POURQUOI C'ÉTAIT FAUX. Elle
+    /// moyennait la GRAINE — les points détectés — alors que ce qui est screené sur
+    /// l'image est cette graine DILATÉE de `rayonDisque`. Pour des points de 2 px de
+    /// rayon sur un cadre de 900 px de grand côté, à k = 1, le facteur d'expansion
+    /// d'aire ((rp + rD)/rp)² vaut :
+    ///   Summicron rD = 3,89 px → ×8,7    Noct-Nikkor 4,86 → ×11,8
+    ///   Helios     8,91 → ×29,8          Biotar      9,72 → ×34,3
+    ///   Takumar   10,04 → ×36,3          Angénieux  11,34 → ×44,5
+    ///   Noctilux  14,26 → ×66,1          Trioplan   15,39 → ×75,6
+    ///   Dream     19,44 → ×114,9
+    /// Les seuils 0,25 % / 1,2 % étaient donc calibrés sur une grandeur une à deux
+    /// décades trop petite : à la limite « porte grande ouverte », les disques
+    /// couvraient déjà 2,2 % du cadre pour le Summicron et 28,7 % pour le Dream ; au
+    /// seuil de fermeture, 10,4 % et 100 %. Et le garde-fou ne dépendait PAS de
+    /// `size` alors que le facteur d'expansion, lui, varie d'un rapport 13 entre le
+    /// Summicron et le Dream : la même scène passait la porte avec un objectif et
+    /// saturait le cadre avec un autre.
+    ///
+    /// PANNE SYMÉTRIQUE, aussi grave : mesurer une surface de GRAINE, c'est punir le
+    /// NOMBRE de points — donc éteindre l'étage C précisément sur la scène la plus
+    /// riche en vraies sources ponctuelles. Mesuré, guirlande de N ampoules de 2 px
+    /// sur un cadre 674×900 : N = 100 → porte 0,747 ; N = 200 → 0,360 ; N = 400 →
+    /// 0,000, ÉTEINT. Une guirlande, un sapin, une ville de nuit sont l'argument de
+    /// vente de cet étage.
+    ///
+    /// La porte mesure donc maintenant la couverture APRÈS dilatation, ce qui est
+    /// exactement la grandeur visuelle, et rend le seuil intrinsèquement dépendant
+    /// de l'objectif sans avoir à le paramétrer.
+    ///
+    /// `CIAreaAverage` moyenne la dilatation GRISE, donc la couverture est pondérée
+    /// par l'amplitude de chaque détection : un faux positif à 0,03 ne pèse que 3 %
+    /// de sa surface. C'est le comportement voulu — la porte mesure ce qui va être
+    /// PEINT, pas ce qui a été candidat. Mesuré avec le détecteur corrigé, cadre
+    /// 674×900, k = 1, couverture puis porte :
+    ///   rue de nuit    graine 0,259 % → 1,29 % (Helios) → 1 · 4,02 % (Dream) → 1
+    ///   pièce du soir  graine 0,340 % → 1,33 %          → 1 · 2,90 %         → 1
+    ///   plage          graine 0,039 % → 0,27 %          → 1 · 0,62 %         → 1
+    ///   mer au soleil  graine 0,030 % → 0,64 %          → 1 · 1,68 %         → 1
+    ///   guirlande 100  graine 0,492 % → 6,50 %          → 1 · 22,45 %        → 0,902
+    ///
+    /// Le comportement en NOMBRE, qui était la panne symétrique, guirlande de N
+    /// ampoules de 2 px (couverture après dilatation, puis porte) :
+    ///     N     Summicron        Helios          Noctilux        Dream
+    ///     100   2,12 %  1,000    6,50 %  1,000   13,85 % 1,000   22,45 % 0,902
+    ///     200   4,12 %  1,000   12,20 %  1,000   24,42 % 0,823   37,21 % 0,312
+    ///     400   8,21 %  1,000   23,88 %  0,845   45,03 % 0,000   63,89 % 0,000
+    ///     800  15,97 %  1,000   42,40 %  0,104   70,21 % 0,000   86,77 % 0,000
+    ///    1600  28,83 %  0,647   64,77 %  0,000   89,07 % 0,000   97,36 % 0,000
+    /// L'extinction ne survient plus au bout de ≈ 350 ampoules pour TOUS les verres,
+    /// mais quand les disques de CE verre-là recouvrent réellement la moitié du
+    /// cadre : 1 600 ampoules au Summicron, 400 au Dream Lens.
+    private static func porteDeCouverture(_ points: CIImage,
+                                          rayonDisque: CGFloat,
+                                          cadre: CGRect) -> CGFloat {
+
+        // Sonde mesurée sur un cadre réduit d'un facteur 4 : la couverture est une
+        // statistique globale, sa résolution spatiale n'a aucune importance, et la
+        // dilatation y coûte 16 fois moins cher.
+        let reduction: CGFloat = 4
+
+        // PRÉ-DILATATION de 2 px AVANT la réduction. Sans elle, le
+        // sous-échantillonnage bilinéaire ne lit qu'un pixel sur quatre et peut
+        // perdre entièrement une ampoule de 2 px : la couverture serait
+        // sous-estimée, la porte resterait ouverte, et c'est le mauvais sens de
+        // panne. Elle surestime légèrement la couverture, ce qui est le sens
+        // acceptable au titre de R5.
+        let sonde = points
+            .clampedToExtent()
+            .applyingFilter("CIMorphologyMaximum", parameters: [
+                "inputRadius": Float(reduction / 2)
+            ])
+            .cropped(to: cadre)
+            .transformed(by: CGAffineTransform(scaleX: 1 / reduction, y: 1 / reduction))
+
+        let cadreSonde = sonde.extent
+        guard cadreSonde.width >= 1, cadreSonde.height >= 1 else { return 0 }
+
+        let etalee = sonde
+            .clampedToExtent()
+            .applyingFilter("CIMorphologyMaximum", parameters: [
+                "inputRadius": Float(max(1, rayonDisque / reduction))
+            ])
+            .cropped(to: cadreSonde)
+
+        let moyenne = etalee.applyingFilter("CIAreaAverage", parameters: [
+            "inputExtent": CIVector(x: cadreSonde.origin.x,
+                                    y: cadreSonde.origin.y,
+                                    z: cadreSonde.width,
+                                    w: cadreSonde.height)
         ])
 
-        // Le gain 32 APRÈS la moyenne est indispensable : sans lui, un rendu
-        // 8 bits ne donnerait que 5 niveaux utiles entre 0 % et 2 % de
-        // couverture. Avec, la résolution atteint 1,2·10⁻⁴, et tout ce qui
-        // dépasse 3,1 % sature — ce qui n'a aucune importance puisque c'est déjà
-        // « éteint ».
-        let amplifie = attenuer(moyenne, facteur: 32)
+        // Le gain 2 APRÈS la moyenne : la couverture utile va maintenant jusqu'à
+        // 45 %, et non plus jusqu'à 1,2 %. Le gain 32 d'avant saturait dès 3,1 %,
+        // ce qui rendrait la nouvelle rampe illisible. Avec 2, la résolution vaut
+        // 0,196 % de couverture et la saturation intervient à 50 %, au-delà du
+        // seuil de fermeture.
+        let amplifie = attenuer(moyenne, facteur: 2)
 
         // Buffer initialisé à 255 et non à 0 : si le rendu GPU échoue en silence,
-        // la couverture lue vaut 0,031 — au-dessus du seuil de fermeture — et
-        // l'étage C est désactivé. C'est le SENS DE LA PANNE imposé par R5 : le
-        // mode de défaillance acceptable est « pas de disques », jamais
+        // la couverture lue vaut 0,500 — au-dessus du seuil de fermeture, qui est
+        // 0,45 — et l'étage C est désactivé. C'est le SENS DE LA PANNE imposé par
+        // R5 : le mode de défaillance acceptable est « pas de disques », jamais
         // « disques faux ». Un buffer à zéro ouvrirait la porte en grand.
         var pixel: [UInt8] = [255, 255, 255, 255]
 
@@ -679,11 +1248,29 @@ enum MoteurOptique {
                                   colorSpace: nil)
         }
 
-        let couverture = CGFloat(pixel[0]) / 255 / 32
-        return min(max((0.012 - couverture) / (0.012 - 0.0025), 0), 1)
+        let couverture = CGFloat(pixel[0]) / 255 / 2
+        return min(max((0.45 - couverture) / (0.45 - 0.20), 0), 1)
     }
 
     // MARK: - Étage C : le calque des disques
+
+    /// Rayon du cercle de confusion, en fraction du grand côté.
+    ///
+    /// Relatif, bornes relatives (R3) : l'aperçu 1200 px et l'export 3200 px restent
+    /// la MÊME image à l'échelle près, même quand la borne mord.
+    ///
+    /// Isolé dans sa propre fonction parce que DEUX étages en dépendent désormais :
+    /// le calque, qui dessine les disques, et le garde-fou de couverture, qui mesure
+    /// la surface qu'ils occuperont. Les recopier serait s'exposer à ce qu'ils
+    /// divergent — c'est-à-dire à mesurer autre chose que ce qu'on dessine, ce qui
+    /// était exactement la panne du garde-fou.
+    ///
+    /// Valeurs à k = 1, en px sur un grand côté de 900 : Summicron 3,89 ·
+    /// Noct-Nikkor 4,86 · Helios 8,91 · Biotar 9,72 · Takumar 10,04 · Angénieux
+    /// 11,34 · Noctilux 14,26 · Trioplan 15,39 · Dream 19,44.
+    private static func rayonDisqueRelatif(_ p: BokehParams, k: CGFloat) -> CGFloat {
+        min(max(0.018 * CGFloat(p.size) * (0.35 + 0.65 * k), 0.0035), 0.055)
+    }
 
     /// Construit le calque lumineux à screener sur l'image.
     ///
@@ -699,39 +1286,79 @@ enum MoteurOptique {
                                       k: CGFloat,
                                       cadre: CGRect,
                                       grandCote: CGFloat,
-                                      petitCote: CGFloat,
+                                      refVignettage: CGFloat,
                                       centre: CIVector) -> CIImage {
 
         let p = lens.bokeh
 
-        // Rayon du cercle de confusion. Relatif, bornes relatives (R3) : l'aperçu
-        // 1200 px et l'export 3200 px restent la MÊME image à l'échelle près,
-        // même quand la borne mord.
-        let rayonRelatif = min(max(0.018 * CGFloat(p.size) * (0.35 + 0.65 * k), 0.0035), 0.055)
-        let rayonDisque = grandCote * rayonRelatif
+        let rayonDisque = grandCote * rayonDisqueRelatif(p, k: k)
         // Largeur de la transition du bord : `soft` va de 0,10 (bord franc du
         // Summicron) à 0,72 (halo évanescent du Dream Lens).
-        let largeurBord = max(1, rayonDisque * (0.10 + 0.55 * CGFloat(p.soft)))
+        //
+        // PLANCHER RELATIF, et non plus `max(1, …)` en pixels absolus : ce plancher
+        // d'un pixel MORDAIT réellement, sur les deux verres les plus nets, et
+        // faisait diverger le viseur de l'export en violation de R3. Largeur brute
+        // à k = 1, en px, pour 900 / 1200 / 3200 : Summicron 0,65 / 0,86 / 2,29 —
+        // écrêtée à 1 dans les deux premiers cadres ; Noct-Nikkor 0,75 / 1,00 /
+        // 2,68 — écrêtée au viseur. Le rapport largeurBord/rayonDisque, qui est LA
+        // grandeur qui décide de l'aspect du bord, valait donc 0,257 au viseur
+        // contre 0,166 à l'export pour le Summicron (×1,55) et 0,206 contre 0,155
+        // pour le Noct-Nikkor (×1,33). Avec un plancher à 0,0006·grandCôté — 0,54 px
+        // à 900, 1,92 px à 3200 — plus aucun des neuf verres n'est écrêté à k = 1,
+        // et quand le plancher mord à basse intensité il mord à l'identique dans
+        // les trois cadres.
+        let largeurBord = max(grandCote * 0.0006,
+                              rayonDisque * (0.10 + 0.55 * CGFloat(p.soft)))
 
         // C2. GRAINE : l'image nue, masquée par les points détectés, relevée puis
         // teintée de la couleur de bokeh de l'objectif. La teinte est appliquée
         // ICI, à la graine des disques, et non à une carte de luminance :
         // c'est la couleur des BULLES du catalogue, pas la dérive du verre (qui
         // relève de l'étage A).
+        //
+        // ORDRE DES DEUX OPÉRATIONS, et c'était une panne complète. Le code posait
+        // un seul gain 1,6·mix(1, teinte, 0,55) PUIS écrêtait. Ce gain vaut au
+        // MINIMUM, sur les trois canaux et pour les neuf verres :
+        //   Takumar 1,141 · Angénieux 1,176 · Noctilux 1,279 · Helios 1,310 ·
+        //   Trioplan 1,383 · Biotar 1,479 · Dream 1,490 · Summicron 1,521 ·
+        //   Noct-Nikkor 1,576
+        // La luminance maximale qui SURVIVE à l'écrêtage vaut donc 1/gain_min, soit
+        // au mieux 0,876 (Takumar) et au pire 0,635 (Noct-Nikkor) — toutes
+        // STRICTEMENT inférieures au seuil BAS de T1, qui est 0,88. Autrement dit :
+        // tout pixel que la détection accepte est écrêté à 1,0 sur R, V ET B. Les
+        // neuf palettes du catalogue sortaient des disques BLANC PUR, rigoureusement
+        // identiques. Vérifié : une source à 0,88 comme une source à 1,00 donnent
+        // (1,000 · 1,000 · 1,000) pour les neuf objectifs. La teinte ne subsistait
+        // que là où `points` < 1 — c'est-à-dire sur les seules détections
+        // marginales, donc sur les faux positifs, et nulle part ailleurs.
+        //
+        // Corrigé en séparant les deux rôles : un RELÈVEMENT neutre 1,6 suivi de
+        // l'écrêtage, puis la TEINTE en gains tous ≤ 1, qui ne peut plus être
+        // écrasée par un plafond qu'elle ne touche pas. Sortie d'un disque saturé
+        // à k = 1, teinte à dose 0,55 : Helios (0,931 · 0,978 · 0,819), Takumar
+        // (1,000 · 0,899 · 0,713), Noct-Nikkor (0,985 · 0,985 · 1,000), Noctilux
+        // (1,000 · 0,933 · 0,799). Les neuf verres sont enfin distincts.
         let teinte = CouleurHex.composantes(lens.palette.first ?? lens.accent)
         let dose = 0.55 * k
-        let graine = base
+        let releve = base
             .applyingFilter("CIMultiplyCompositing", parameters: ["inputBackgroundImage": points])
             .applyingFilter("CIColorMatrix", parameters: [
-                "inputRVector": CIVector(x: 1.6 * melange(1, teinte.0, dose), y: 0, z: 0, w: 0),
-                "inputGVector": CIVector(x: 0, y: 1.6 * melange(1, teinte.1, dose), z: 0, w: 0),
-                "inputBVector": CIVector(x: 0, y: 0, z: 1.6 * melange(1, teinte.2, dose), w: 0),
+                "inputRVector": CIVector(x: 1.6, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: 1.6, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: 1.6, w: 0),
                 "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)
             ])
             .applyingFilter("CIColorClamp", parameters: [
                 "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
                 "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
             ])
+
+        let graine = releve.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: melange(1, teinte.0, dose), y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: melange(1, teinte.1, dose), z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: melange(1, teinte.2, dose), w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1)
+        ])
 
         // C3. DISQUES. La dilatation morphologique étale chaque point lumineux en
         // un disque de rayon constant — c'est littéralement le cercle de
@@ -838,7 +1465,7 @@ enum MoteurOptique {
         if p.cat > 0.02 {
             couche = couche.applyingFilter("CIVignetteEffect", parameters: [
                 "inputCenter": centre,
-                "inputRadius": Float(petitCote * 0.62),
+                "inputRadius": Float(refVignettage * 0.62),
                 "inputIntensity": Float(CGFloat(p.cat) * k * 0.55),
                 "inputFalloff": Float(0.5)
             ])
@@ -875,28 +1502,50 @@ enum MoteurOptique {
             ])
     }
 
-    /// Masque radial : noir ET transparent au centre, blanc ET opaque au-delà.
+    /// Masque NORMALISÉ AU CADRE : noir et transparent au centre, blanc et opaque
+    /// au-delà, avec des rayons exprimés en fraction du DEMI-CÔTÉ correspondant.
     ///
-    /// La rampe est portée simultanément par la LUMINANCE et par l'ALPHA parce
-    /// que la documentation de `CIBlendWithMask` est ambiguë selon les versions
-    /// sur le canal réellement utilisé. En faisant coïncider les deux, le masque
-    /// est correct quelle que soit la convention — voie conservatrice assumée.
+    /// `debut` et `fin` sont sans dimension. u = 1 est l'ELLIPSE INSCRITE, qui
+    /// touche le milieu des quatre bords ; le coin est à u = √2. Ces deux repères
+    /// ne dépendent d'AUCUN format, donc les statistiques du masque (aire saturée,
+    /// aire nette, moyenne) sont rigoureusement identiques pour un carré, un 4:3,
+    /// un 3:2, un 2,17 ou un panoramique 5:1 — ce que ni l'ancrage sur la
+    /// diagonale ni l'ancrage sur le petit côté ne savaient faire. C'est la forme
+    /// forte de R3 appliquée à la géométrie, et non plus seulement aux longueurs.
     ///
-    /// `CIRadialGradient` produit une image d'étendue INFINIE : le recadrage
-    /// n'est pas cosmétique, il est obligatoire.
-    private static func masqueRadial(cadre: CGRect, rayon0: CGFloat, rayon1: CGFloat) -> CIImage? {
-        guard let filtre = CIFilter(name: "CIRadialGradient", parameters: [
-            "inputCenter": CIVector(x: cadre.midX, y: cadre.midY),
-            "inputRadius0": Float(rayon0),
-            "inputRadius1": Float(max(rayon1, rayon0 + 1)),
-            "inputColor0": CIColor(red: 0, green: 0, blue: 0, alpha: 0),
-            "inputColor1": CIColor(red: 1, green: 1, blue: 1, alpha: 1)
-        ]), let sortie = filtre.outputImage else {
+    /// La rampe est portée simultanément par la LUMINANCE et par l'ALPHA parce que
+    /// la documentation de `CIBlendWithMask` est ambiguë selon les versions sur le
+    /// canal réellement utilisé. En faisant coïncider les deux, le masque est
+    /// correct quelle que soit la convention — voie conservatrice assumée.
+    ///
+    /// Le gradient est produit sur une grille de rayon `unite` puis étiré au cadre
+    /// par une transformation ANISOTROPE. Passer par une grille de 512 plutôt que
+    /// d'écrire directement des rayons de l'ordre de 0,5 évite de demander à un
+    /// générateur procédural de rendre une rampe entière à l'intérieur d'un pixel.
+    private static func masqueCadre(cadre: CGRect, debut: CGFloat, fin: CGFloat) -> CIImage? {
+        let unite: CGFloat = 512
+        guard cadre.width > 0, cadre.height > 0,
+              let filtre = CIFilter(name: "CIRadialGradient", parameters: [
+                "inputCenter": CIVector(x: 0, y: 0),
+                "inputRadius0": Float(debut * unite),
+                "inputRadius1": Float(max(fin, debut + 0.002) * unite),
+                "inputColor0": CIColor(red: 0, green: 0, blue: 0, alpha: 0),
+                "inputColor1": CIColor(red: 1, green: 1, blue: 1, alpha: 1)
+              ]), let sortie = filtre.outputImage else {
             // R5 : pas de masque → l'appelant renonce à l'étape plutôt que de
             // l'appliquer sans confinement.
             return nil
         }
-        return sortie.cropped(to: cadre)
+
+        // Étirement puis recentrage : un point à la distance u·unite de l'origine
+        // atterrit sur l'ellipse de demi-axes u·largeur/2 et u·hauteur/2.
+        let etirement = CGAffineTransform(scaleX: cadre.width / (2 * unite),
+                                          y: cadre.height / (2 * unite))
+            .concatenating(CGAffineTransform(translationX: cadre.midX, y: cadre.midY))
+
+        // `CIRadialGradient` produit une image d'étendue INFINIE : le recadrage
+        // n'est pas cosmétique, il est obligatoire.
+        return sortie.transformed(by: etirement).cropped(to: cadre)
     }
 
     /// Dilatation morphologique, clampée puis recadrée (R2).

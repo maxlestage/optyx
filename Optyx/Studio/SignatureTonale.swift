@@ -61,6 +61,30 @@ enum CouleurHex {
 struct SignatureTonale {
 
     /// Gains multiplicatifs, un par canal. 1 = neutre.
+    ///
+    /// PLAFOND — invariant à respecter pour toute ligne ajoutée ou modifiée : aucun
+    /// canal ne doit dépasser 1,0 en sortie de l'étage A1 pour une entrée blanche.
+    /// Le rendu final est 8 bits ; tout ce qui dépasse est tranché, et comme le
+    /// dépassement est PAR CANAL, c'est toujours le canal dominant — donc la
+    /// signature du verre — qui est aplati le premier. L'effet ne s'atténue pas dans
+    /// les hautes lumières : il s'INVERSE, la teinte retombant vers le neutre
+    /// exactement là où elle devait s'affirmer. Deux verres sur neuf en sont morts.
+    ///
+    /// La valeur à contrôler n'est pas le gain mais la sortie complète de l'étage,
+    /// saturation et contraste compris — c'est le contraste, pivotant sur 0,5, qui
+    /// fixe le plafond du Noct-Nikkor, pas son gain bleu. Pour un gris d'entrée x :
+    ///
+    ///     c   = gain·x + biais                       (CIColorMatrix)
+    ///     lum = 0,2125·cR + 0,7154·cV + 0,0721·cB
+    ///     c   = lum + (c − lum)·saturation           (CIColorControls)
+    ///     c   = (c − 0,5)·contraste + 0,5
+    ///
+    /// à évaluer sur toute la grille (x, k) et non au seul k = 1 : le moteur
+    /// interpole les gains vers 1 quand l'intensité baisse, et un triplet entièrement
+    /// sous 1 REMONTE donc quand k décroît. Le pire dépassement du Noct-Nikkor se
+    /// produit à k intermédiaire. Pour teinter davantage sans déborder, il faut
+    /// BAISSER les autres canaux, jamais monter le canal dominant : c'est le rapport
+    /// entre les gains qui porte la teinte, leur niveau ne porte que l'exposition.
     let gainR: CGFloat
     let gainV: CGFloat
     let gainB: CGFloat
@@ -135,19 +159,53 @@ struct SignatureTonale {
                                    biaisR: 0.010, biaisV: 0.008, biaisB: 0.012,
                                    saturation: 0.92, contraste: 0.88, vignettage: 0.50)
 
-        // Super Takumar — LE plus marqué du catalogue : rouge +8,5 %, bleu −11,5 %.
-        // C'est le jaunissement du verre au thorium, et cet objectif doit sortir
-        // franchement doré, sans quoi son unique trait à 1 (« Dérive chaude »)
-        // ne se lit nulle part dans l'image.
+        // Super Takumar — LE plus marqué du catalogue : c'est le jaunissement du
+        // verre au thorium, et cet objectif doit sortir franchement doré, sans quoi
+        // son unique trait à 1 (« Dérive chaude ») ne se lit nulle part.
+        //
+        // Ce qui FAIT la dorure est le RAPPORT R/B = 0,993 / 0,810 = 1,2259, pas le
+        // niveau absolu des gains. L'ancienne écriture (1,085 / 1,020 / 0,885) tenait
+        // le même rapport, 1,2260, mais en montant le rouge AU-DESSUS de 1 : avec la
+        // saturation 1,05, une entrée blanche ressortait à R = 1,0921. Les 8,47 %
+        // supérieurs de la plage (tout ce qui dépasse une entrée de 0,9153) étaient
+        // donc aplatis sur R = 1,0 par le 8 bits pendant que V et B continuaient de
+        // monter, et le rapport R/B RENDU retombait de 1,244 à 1,139 entre le seuil
+        // et le blanc : ciel, chemise blanche et sable au soleil ressortaient MOINS
+        // dorés que les demi-teintes, l'exact inverse de la signature annoncée.
+        //
+        // Le triplet est donc mis à l'échelle par 0,9153 — le plus grand facteur qui
+        // ne déborde jamais, vérifié sur toute la grille (entrée, intensité k) et
+        // non au seul k = 1. Le rapport de gains est conservé à la quatrième décimale
+        // (1,2260 → 1,2259), le rouge atterrit exactement sur 1,000 pour une entrée
+        // blanche, et le R/B rendu devient constant : 1,2566 à 0,30 · 1,2466 à 0,70 ·
+        // 1,2453 à 0,85 · 1,2444 à 1,00 (contre 1,1390 avant). Prix payé : −0,077 EV
+        // sur le blanc, −0,127 EV sur les demi-teintes. La teinte, elle, ne bouge pas.
         case "super-takumar":
-            return SignatureTonale(gainR: 1.085, gainV: 1.020, gainB: 0.885,
+            return SignatureTonale(gainR: 0.993, gainV: 0.934, gainB: 0.810,
                                    biaisR: 0.004, biaisV: 0.002, biaisB: 0.000,
                                    saturation: 1.05, contraste: 1.00, vignettage: 0.30)
 
-        // Noct-Nikkor — froid et mordant, seul verre du catalogue à gain bleu
-        // dominant. Contraste le plus haut (trait « Micro-contraste » 0,85).
+        // Noct-Nikkor — froid et mordant, seul verre du catalogue à bleu dominant.
+        // Contraste le plus haut du catalogue (trait « Micro-contraste » 0,85), et
+        // c'est LUI qui fixe le plafond ici : un contraste de 1,08 pivote sur 0,5 et
+        // envoie à lui seul une entrée de 1,0 sur 1,04, avant même le moindre gain.
+        //
+        // Défaut symétrique de celui du Super Takumar, corrigé de la même façon.
+        // L'ancienne écriture (0,985 / 0,995 / 1,045) écrêtait le bleu dès une entrée
+        // de 0,9158 : l'écart B−R RENDU, qui EST le mordant froid, culminait à 6,58
+        // points au seuil puis retombait à 4,00 à 0,94, à 1,56 à 0,963 et à 0,00 au
+        // blanc — les hautes lumières d'un verre « froid et mordant » finissaient
+        // parfaitement neutres, sur les 8,42 % supérieurs de la plage.
+        //
+        // Mise à l'échelle du triplet par 0,9129. Ce facteur n'est PAS 1/1,045 :
+        // ramener simplement le gain bleu à 1,000 laisse le contraste écrêter seul
+        // dès 0,9570, et le pire dépassement ne se produit même pas à k = 1 — il
+        // faut balayer toute la grille (entrée, intensité) pour le trouver. Rapport
+        // B/R conservé (1,0609 → 1,0612), et l'écart B−R rendu MONTE désormais sans
+        // rechute : 2,43 pts à 0,30 · 4,81 à 0,70 · 5,70 à 0,85 · 6,29 à 0,95 ·
+        // 6,59 au blanc. Prix payé : −0,085 EV sur le blanc, −0,143 EV en demi-teinte.
         case "noct-nikkor":
-            return SignatureTonale(gainR: 0.985, gainV: 0.995, gainB: 1.045,
+            return SignatureTonale(gainR: 0.899, gainV: 0.908, gainB: 0.954,
                                    biaisR: 0.000, biaisV: 0.000, biaisB: 0.006,
                                    saturation: 1.00, contraste: 1.08, vignettage: 0.40)
 
