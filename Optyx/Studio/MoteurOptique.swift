@@ -476,7 +476,11 @@ enum MoteurOptique {
         //     Le déplacement maximal est donc porté à 5,5 % du grand côté, soit
         //     49,5 px au viseur et 176 px à l'export pour l'Helios. C'est un
         //     mouvement franc du fond, qui se lit immédiatement.
-        let angleTourbillon = CGFloat(p.swirl) * k * (0.070 / 0.1875)
+        // ARC DOUBLÉ : 7,0 % -> 15,0 % du grand côté. C'est ce que demande un
+        // Helios, dont la fiche promet un arrière-plan qui « tournoie,
+        // littéralement » — et le filé, désormais correctement calculé,
+        // supporte cette amplitude sans dédoubler.
+        let angleTourbillon = CGFloat(p.swirl) * k * (0.150 / 0.1875)
 
         if p.swirl > 0.02,
            let masqueTourbillon = masqueCadre(cadre: cadre, debut: 0.50, fin: 0.88) {
@@ -519,36 +523,68 @@ enum MoteurOptique {
             // R/2). On demande donc autant d'échantillons qu'il faut pour que
             // l'écart tombe sous le rayon de flou, borné à 9 : au-delà le coût
             // grimpe sans que l'œil distingue quoi que ce soit de plus.
+            // Le plafond passe de 9 à 16 copies. Il était devenu le facteur
+            // limitant : à 15 % d'arc, neuf copies les espacent de 17 px pour
+            // un rayon de flou de 8 px — soit exactement le régime de
+            // dédoublement qu'on cherche à éviter. Le coût est absorbé par la
+            // demi-résolution ci-dessous.
             let deplacement = angleTourbillon * grandCote * 0.75 / 4
             let rayonFlouPx = max(2, grandCote * rayonFlouRelatif)
-            let echantillons = min(9, max(4, Int((deplacement / rayonFlouPx).rounded(.up)) + 1))
+            let echantillons = min(16, max(4, Int((deplacement / rayonFlouPx).rounded(.up)) + 1))
 
-            var file = flou
+            // FILÉ CALCULÉ EN DEMI-RÉSOLUTION.
+            //
+            // Seize torsions plus quinze fondus, à pleine résolution et trente
+            // fois par seconde, deviendraient le poste le plus lourd de la
+            // trame — bien devant le reste de la chaîne. Or l'image qu'on
+            // traite ici est DÉJÀ défocalisée : elle ne contient, par
+            // définition, aucun détail qu'une réduction de moitié pourrait
+            // perdre. Le coût tombe donc au quart pour un résultat que rien ne
+            // distingue, et c'est ce qui rend l'arc de 46° abordable.
+            //
+            // Le centre et le rayon sont recalculés dans le repère réduit :
+            // les réutiliser tels quels placerait le centre de rotation au
+            // quart du cadre, et le tourbillon s'enroulerait autour d'un point
+            // situé en haut à gauche de l'image.
+            let echelleFile: CGFloat = 0.5
+            let cadreFile = CGRect(x: cadre.minX * echelleFile,
+                                   y: cadre.minY * echelleFile,
+                                   width: cadre.width * echelleFile,
+                                   height: cadre.height * echelleFile)
+            let centreFile = CIVector(x: cadreFile.midX, y: cadreFile.midY)
+            let rayonFile = Float(grandCote * 0.75 * echelleFile)
+            let reduite = flou
                 .clampedToExtent()
-                .applyingFilter("CIVortexDistortion", parameters: [
-                    "inputCenter": centre,
-                    "inputRadius": Float(grandCote * 0.75),
-                    "inputAngle": Float(0)
-                ])
-                .cropped(to: cadre)
+                .transformed(by: CGAffineTransform(scaleX: echelleFile, y: echelleFile))
 
-            for n in 1..<echantillons {
-                let fraction = CGFloat(n) / CGFloat(echantillons - 1)
-                let copie = flou
+            func tordre(_ angle: CGFloat) -> CIImage {
+                reduite
                     .clampedToExtent()
                     .applyingFilter("CIVortexDistortion", parameters: [
-                        "inputCenter": centre,
-                        "inputRadius": Float(grandCote * 0.75),
-                        "inputAngle": Float(angleTourbillon * fraction)
+                        "inputCenter": centreFile,
+                        "inputRadius": rayonFile,
+                        "inputAngle": Float(angle)
                     ])
-                    .cropped(to: cadre)
-                file = copie.applyingFilter("CIDissolveTransition", parameters: [
-                    "inputTargetImage": file,
-                    kCIInputTimeKey: Float(CGFloat(n) / CGFloat(n + 1))
-                ])
+                    .cropped(to: cadreFile)
             }
 
-            flou = file.applyingFilter("CIBlendWithMask", parameters: [
+            var file = tordre(0)
+            for n in 1..<echantillons {
+                let fraction = CGFloat(n) / CGFloat(echantillons - 1)
+                file = tordre(angleTourbillon * fraction)
+                    .applyingFilter("CIDissolveTransition", parameters: [
+                        "inputTargetImage": file,
+                        kCIInputTimeKey: Float(CGFloat(n) / CGFloat(n + 1))
+                    ])
+            }
+
+            let fileAgrandie = file
+                .clampedToExtent()
+                .transformed(by: CGAffineTransform(scaleX: 1 / echelleFile,
+                                                   y: 1 / echelleFile))
+                .cropped(to: cadre)
+
+            flou = fileAgrandie.applyingFilter("CIBlendWithMask", parameters: [
                 "inputBackgroundImage": flou,
                 "inputMaskImage": masqueTourbillon
             ])
