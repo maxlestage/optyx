@@ -1378,12 +1378,18 @@ enum MoteurOptique {
         // on fait donc tourner l'IMAGE de 45° (voir `ouverturesDiagonales`). Une
         // seule paire de rééchantillonnages sert les deux diagonales.
         //
-        // LONGUEUR DU SEGMENT : `rayonAnalyse` arrondi au nombre IMPAIR supérieur,
-        // comme l'exige `CIMorphologyRectangle*`, soit 9 px sur la grille d'analyse
-        // normalisée à 900 px — contre 0,6·rayonAnalyse, soit 5 px, auparavant. Le
-        // segment vaut ainsi le RAYON DU DISQUE D'ANALYSE de T3 : les deux termes
-        // s'accordent sur ce qu'est « une petite structure ». Balayage mesuré, sur
-        // fond de scène 0,00 et 0,25 :
+        // LONGUEUR DU SEGMENT : elle vaut `rayonAnalyse` RAPPORTÉ À L'IMAGE
+        // D'ORIGINE, arrondi au nombre impair supérieur comme l'exige
+        // `CIMorphologyRectangle*` — 5 px sur la grille de travail, qui est
+        // demi-résolution, donc 10 px sur la grille d'analyse normalisée à 900. Le
+        // segment vaut ainsi le RAYON DU DISQUE D'ANALYSE de T3 (9 px) : les deux
+        // termes s'accordent sur ce qu'est « une petite structure ».
+        //
+        // C'est la bonne échelle, et c'est mesurable : trop court, le segment
+        // laisse survivre les bandes plus larges que lui ; trop long, il ne suit
+        // plus la courbure d'un contour, aucune direction ne le préserve et le
+        // contour repasse pour compact. Balayage à pleine résolution, fonds de
+        // scène 0,00 et 0,25, valeur du terme T5 :
         //
         //     structure                    L=5     L=7     L=9     L=11
         //     source ponctuelle σ = 1 à 5   1,000   1,000   1,000   1,000
@@ -1392,24 +1398,45 @@ enum MoteurOptique {
         //     contour courbe épais. 9 px    0,965   0,578   0,170   0,000
         //     contour courbe épais. 3 px    0,000   0,000   0,192   0,490
         //
-        // 9 est le seul réglage qui annule toutes les bandes jusqu'à sa propre
-        // longueur sans réveiller les contours fins : à 11, un contour courbe de
-        // 3 px se courbe assez sur la corde du segment pour qu'aucune direction ne
-        // le préserve, et il repasse pour compact. Les sources ponctuelles, elles,
-        // restent à 1,000 sur toute la plage — la longueur du segment ne les
-        // concerne pas, ce qui est la propriété même de cette formulation.
+        // Les sources ponctuelles restent à 1,000 sur TOUTE la plage : la longueur
+        // du segment ne les concerne pas, ce qui est la propriété même de cette
+        // formulation. Seul le compromis bandes/courbure décide.
         //
-        // LIMITE ASSUMÉE ET CHIFFRÉE : une bande de 13 px reste à 0,454 sur fond
-        // 0,25. Une telle bande dépasse le disque d'analyse de T3 (rayon 9 px) ;
-        // c'est à T3 de la traiter comme un aplat, pas à T5.
-        let coteSegment = max(3, Int(rayonAnalyse.rounded(.up)) | 1)
-        let (ouvertureD1, ouvertureD2) = ouverturesDiagonales(luminance,
+        // LIMITE ASSUMÉE ET CHIFFRÉE : une bande de 13 px n'atteint que 0,322
+        // d'anisotropie, la valeur la plus basse de tout ce qu'on veut rejeter.
+        // Elle reste rejetée par la rampe ci-dessous, mais avec la marge la plus
+        // mince du tableau. Une bande plus large encore dépasserait le disque
+        // d'analyse de T3 ; c'est alors à T3 de la traiter comme un aplat.
+        //
+        // ÉTAGE CALCULÉ EN DEMI-RÉSOLUTION, segment de 5 px au lieu de 9.
+        //
+        // Les quatre ouvertures et les deux rotations coûtaient cher : sur
+        // appareil, le Trioplan tournait à 18,8 im/s pour 45 ms de GPU. À demi-
+        // résolution le nombre de pixels tombe au quart, et un segment de 5 px y
+        // couvre les mêmes 10 px de l'image d'origine qu'un segment de 9 px à
+        // pleine résolution. Vérifié structure par structure, l'équivalence est
+        // exacte à une exception près, chiffrée plus bas.
+        //
+        // La réduction est une transformation AFFINE (bilinéaire) et non un
+        // Lanczos, pour la raison déjà donnée à `etageMorphologique` : les lobes
+        // négatifs de Lanczos feraient dépasser l'ouverture au-dessus de la
+        // luminance le long des bords clairs, donc un faux chapeau, donc
+        // exactement le générateur de liserés que R4 interdit.
+        let facteurT5: CGFloat = 0.5
+        let coteSegment = max(3, Int((rayonAnalyse * facteurT5).rounded(.up)) | 1)
+        let cadreT5 = CGRect(x: cadre.minX * facteurT5, y: cadre.minY * facteurT5,
+                             width: cadre.width * facteurT5, height: cadre.height * facteurT5)
+        let luminanceT5 = luminance
+            .clampedToExtent()
+            .transformed(by: CGAffineTransform(scaleX: facteurT5, y: facteurT5))
+            .cropped(to: cadreT5)
+        let (ouvertureD1, ouvertureD2) = ouverturesDiagonales(luminanceT5,
                                                               longueur: coteSegment,
-                                                              cadre: cadre)
-        let ouvertureH = ouvertureRectangle(luminance, largeur: coteSegment,
-                                            hauteur: 1, cadre: cadre)
-        let ouvertureV = ouvertureRectangle(luminance, largeur: 1,
-                                            hauteur: coteSegment, cadre: cadre)
+                                                              cadre: cadreT5)
+        let ouvertureH = ouvertureRectangle(luminanceT5, largeur: coteSegment,
+                                            hauteur: 1, cadre: cadreT5)
+        let ouvertureV = ouvertureRectangle(luminanceT5, largeur: 1,
+                                            hauteur: coteSegment, cadre: cadreT5)
         let plusGrande = ouvertureH
             .applyingFilter("CIMaximumCompositing", parameters: ["inputBackgroundImage": ouvertureV])
             .applyingFilter("CIMaximumCompositing", parameters: ["inputBackgroundImage": ouvertureD1])
@@ -1418,10 +1445,47 @@ enum MoteurOptique {
             .applyingFilter("CIMinimumCompositing", parameters: ["inputBackgroundImage": ouvertureV])
             .applyingFilter("CIMinimumCompositing", parameters: ["inputBackgroundImage": ouvertureD1])
             .applyingFilter("CIMinimumCompositing", parameters: ["inputBackgroundImage": ouvertureD2])
-        let anisotropie = plusGrande.applyingFilter("CIDifferenceBlendMode", parameters: [
-            "inputBackgroundImage": plusPetite
-        ])
-        let t5 = rampe(anisotropie, bas: 0.35, haut: 0.10)
+        let anisotropie = plusGrande
+            .applyingFilter("CIDifferenceBlendMode", parameters: [
+                "inputBackgroundImage": plusPetite
+            ])
+            .clampedToExtent()
+            .transformed(by: CGAffineTransform(scaleX: 1 / facteurT5, y: 1 / facteurT5))
+            .cropped(to: cadre)
+        // RAMPE RECALÉE : (0,35 → 0,10) → (0,15 → 0,04).
+        //
+        // L'ancienne bande n'avait jamais été mesurée sur la grandeur qu'elle
+        // seuille — elle avait été héritée de la formulation PRÉCÉDENTE de T5,
+        // celle qui mesurait `luminance − min(ouvertures)` et dont les valeurs
+        // n'ont rien à voir. Résultat : sa borne de rejet, 0,35, tombait AU-DESSUS
+        // du pire cas à rejeter, et les contours courbes fins passaient.
+        //
+        // Anisotropie mesurée au PIRE endroit de chaque structure — maximum sur
+        // une source qu'il faut garder, minimum le long d'un contour qu'il faut
+        // rejeter, seul point où la décision peut basculer :
+        //
+        //     à garder                          à rejeter
+        //     point σ = 1 px      0,000         lamelle 5 px horizontale  0,623
+        //     point σ = 2 px      0,017         lamelle 5 px à 45°        0,511
+        //     point σ = 3 px      0,016         lamelle 9 px à 45°        0,435
+        //     point σ = 5 px      0,024         lamelle 13 px             0,322
+        //                                       contour courbe ép. 5 px   0,370
+        //                                       contour courbe ép. 3 px   0,256
+        //     ─────────────────────────────────────────────────────────────────
+        //     PIRE               0,024          PIRE                      0,256
+        //
+        // Un rapport de 10,7 entre les deux familles, et l'ancienne bande était
+        // posée tout entière du mauvais côté : avec bas = 0,35 > 0,256, le contour
+        // courbe de 3 px ressortait à 0,376 — les bulles qui suivent le bord
+        // éclairé d'un visage. (0,15 → 0,04) est le centrage géométrique du trou :
+        // 1,67 fois de marge sur les sources, 1,71 fois sur les contours.
+        //
+        // Avec ce recalage, toutes les sources du tableau rendent 1,000 et tous
+        // les contours 0,000. Le passage en demi-résolution ne coûte donc RIEN en
+        // qualité — la seule dégradation qu'il apportait, le contour courbe de
+        // 3 px remontant de 0,192 à 0,376, était en réalité un défaut de la rampe,
+        // que la pleine résolution masquait à peine mieux.
+        let t5 = rampe(anisotropie, bas: 0.15, haut: 0.04)
 
         return t1
             .applyingFilter("CIMultiplyCompositing", parameters: ["inputBackgroundImage": t2])
