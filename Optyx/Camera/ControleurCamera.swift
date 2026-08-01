@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreImage
+import CoreImage.CIFilterBuiltins
 import CoreMedia
 import ImageIO
 import Photos
@@ -116,6 +117,10 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// à zéro ne donne pas la même chose (il laisse la chaîne s'exécuter).
     @Published var vueNeutre = false { didSet { recopierOutils() } }
 
+    /// Répartition des tons du rendu AFFICHÉ. Vide tant que l'histogramme n'est
+    /// pas demandé.
+    @Published private(set) var histogramme: DonneesHistogramme = .vide
+
     /// Un enregistrement vidéo est-il en cours ? Pilote le bouton et le
     /// chronomètre.
     @Published private(set) var enregistrementEnCours = false
@@ -195,6 +200,10 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// Dernière seconde publiée. Évite trente sauts sur le fil principal par
     /// seconde pour une valeur qui ne change qu'une fois.
     private var secondesPubliees = -1
+
+    /// Compteur de trames pour la cadence réduite de l'histogramme.
+    /// `fileVideo` uniquement.
+    private var compteurHistogramme = 0
 
     /// Copies protégées par `verrouReglages`, lues à chaque trame sur
     /// `fileVideo`. Les `@Published` correspondants appartiennent au fil
@@ -822,6 +831,55 @@ final class ControleurCamera: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Histogramme
+
+    /// Nombre de classes. 64 et non 256 : au-delà, le tracé n'apporte plus
+    /// aucune information sur un histogramme large de quelques centimètres, et
+    /// la lecture GPU→CPU croît d'autant.
+    private static let classesHistogramme = 64
+
+    /// Mesure la répartition des tons. Appelée sur `fileVideo`.
+    private func mesurerHistogramme(_ image: CIImage, cadre: CGRect) {
+        let classes = Self.classesHistogramme
+        let filtre = CIFilter.areaHistogram()
+        filtre.inputImage = image
+        filtre.extent = cadre
+        filtre.count = classes
+        filtre.scale = 1
+        guard let sortie = filtre.outputImage else { return }
+
+        var brut = [Float](repeating: 0, count: classes * 4)
+        MoteurOptique.contexteImages.render(
+            sortie,
+            toBitmap: &brut,
+            rowBytes: classes * 16,
+            bounds: CGRect(x: 0, y: 0, width: classes, height: 1),
+            format: .RGBAf,
+            colorSpace: nil)
+
+        var rouge = [Float](repeating: 0, count: classes)
+        var vert = rouge
+        var bleu = rouge
+        for classe in 0..<classes {
+            rouge[classe] = brut[classe * 4]
+            vert[classe] = brut[classe * 4 + 1]
+            bleu[classe] = brut[classe * 4 + 2]
+        }
+
+        // Normalisation par le PIC COMMUN aux trois canaux, et non canal par
+        // canal : normaliser séparément ferait monter les trois courbes au même
+        // sommet et effacerait précisément ce qu'on vient lire — la dominante
+        // de couleur. Sur un Takumar, les trois canaux paraîtraient équilibrés.
+        let pic = max(rouge.max() ?? 0, vert.max() ?? 0, bleu.max() ?? 0)
+        guard pic > 0 else { return }
+        let donnees = DonneesHistogramme(rouge: rouge.map { $0 / pic },
+                                         vert: vert.map { $0 / pic },
+                                         bleu: bleu.map { $0 / pic })
+        DispatchQueue.main.async { [weak self] in
+            self?.histogramme = donnees
+        }
+    }
+
     // MARK: - Vidéo
 
     /// Démarre ou arrête l'enregistrement. À appeler depuis le fil principal.
@@ -1207,6 +1265,26 @@ extension ControleurCamera: AVCaptureVideoDataOutputSampleBufferDelegate,
                                             to: cible,
                                             bounds: cadreRendu,
                                             colorSpace: espaceViseur)
+
+        // HISTOGRAMME — mesuré sur le rendu AFFICHÉ, jamais sur le flux brut :
+        // il doit décrire l'image qu'on va enregistrer, pas celle que le capteur
+        // a livrée. Un histogramme du brut annoncerait des hautes lumières que
+        // le vignettage et la dérive du verre auront déplacées.
+        //
+        // Calculé sur `fileVideo` et non sur une file dédiée, à dessein : le
+        // tampon appartient à un anneau de trois et sera réécrit sous peu. Le
+        // lire depuis une autre file serait une course, et l'histogramme
+        // décrirait par intermittence une trame plus récente que celle affichée.
+        //
+        // Une trame sur six : la mesure est un aller-retour GPU→CPU, donc un
+        // vidage de pipeline. À trente par seconde elle coûterait plus que tout
+        // le reste de la chaîne, pour un tracé que l'œil ne peut pas suivre.
+        if outilsCourants.histogramme {
+            compteurHistogramme += 1
+            if compteurHistogramme % 6 == 0 {
+                mesurerHistogramme(CIImage(cvPixelBuffer: cible), cadre: cadreRendu)
+            }
+        }
 
         // AIDES VISUELLES — posées sur une COPIE destinée au seul écran, et
         // après que le tampon a été écrit. Ni la photo ni la vidéo ne les

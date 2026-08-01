@@ -237,6 +237,20 @@ struct VueCamera: View {
         VStack(spacing: 0) {
             barreHaute
 
+            // Posé sous la barre haute et aligné à droite : c'est le seul coin
+            // du viseur qu'aucune commande n'occupe, et il faut pouvoir cadrer
+            // sans que l'histogramme recouvre le sujet.
+            if camera.outils.histogramme, !camera.histogramme.estVide {
+                HStack {
+                    Spacer(minLength: 0)
+                    VueHistogramme(donnees: camera.histogramme)
+                        .frame(width: 148, height: 62)
+                }
+                .padding(.horizontal, Theme.Espace.margeSection)
+                .padding(.top, 8)
+                .transition(.opacity)
+            }
+
             if outilsOuverts {
                 HStack {
                     Spacer(minLength: 0)
@@ -268,8 +282,8 @@ struct VueCamera: View {
     /// se demande d'où viennent les hachures vertes à l'écran.
     private var outilsActifs: Bool {
         camera.outils.zebras || camera.outils.peaking
-            || camera.outils.grille || camera.vueNeutre
-            || camera.format != .natif
+            || camera.outils.grille || camera.outils.histogramme
+            || camera.vueNeutre || camera.format != .natif
     }
 
     /// PANNEAU DES OUTILS PROFESSIONNELS.
@@ -292,6 +306,8 @@ struct VueCamera: View {
                          actif: camera.outils.zebras) { camera.outils.zebras.toggle() }
             interrupteur("Grille des tiers", "grid",
                          actif: camera.outils.grille) { camera.outils.grille.toggle() }
+            interrupteur("Histogramme", "waveform",
+                         actif: camera.outils.histogramme) { camera.outils.histogramme.toggle() }
 
             Divider().overlay(Theme.Couleur.texteAttenue.opacity(0.3))
 

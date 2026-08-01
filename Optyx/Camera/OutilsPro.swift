@@ -52,6 +52,10 @@ struct ReglagesOutils: Equatable {
     var zebras = false
     var peaking = false
     var grille = false
+    /// L'histogramme n'est PAS une aide dessinée : c'est une vue SwiftUI posée
+    /// par-dessus le viseur, et son coût est une mesure GPU→CPU, pas un nœud de
+    /// plus dans le graphe. Il est donc exclu de `aucuneAideDessinee`.
+    var histogramme = false
 
     var aucuneAideDessinee: Bool { !zebras && !peaking && !grille }
 }
