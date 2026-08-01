@@ -68,6 +68,10 @@ struct VueCamera: View {
     /// demi-seconde.
     @State private var jetonRetour = UUID()
 
+    /// Panneau des outils replié par défaut : ces réglages se posent une
+    /// fois puis s'oublient, et les laisser à l'écran mangerait le cadrage.
+    @State private var outilsOuverts = false
+
     // MARK: Corps
 
     var body: some View {
@@ -133,6 +137,26 @@ struct VueCamera: View {
 
     private var vueDuViseur: some View {
         VueApercu(rendu: viseur)
+            // DÉCLENCHEUR MATÉRIEL — boutons de volume et bouton Commande.
+            //
+            // Posé sur le viseur, qui est la seule vue présente pendant toute
+            // la durée de vie de l'écran : l'accrocher à une commande du bas le
+            // ferait disparaître avec elle. La vue superposée est transparente
+            // et ne capte aucun toucher.
+            //
+            // Un appui pendant un enregistrement l'ARRÊTE, il ne prend pas une
+            // photo : c'est le geste attendu, et prendre une photo à ce moment
+            // laisserait la vidéo tourner sans que rien ne le signale.
+            .overlay(
+                DeclencheurPhysique {
+                    if camera.enregistrementEnCours {
+                        camera.basculerEnregistrement()
+                    } else {
+                        camera.declencher()
+                    }
+                }
+                .allowsHitTesting(false)
+            )
             // Plein cadre, jusque sous l'encoche : le viseur est l'écran.
             // L'image y est cadrée en aspect-fit, donc rien n'est rogné — ce
             // sont les bandes noires qui vont sous les bords, pas la photo.
@@ -212,6 +236,31 @@ struct VueCamera: View {
     private var commandes: some View {
         VStack(spacing: 0) {
             barreHaute
+
+            // Posé sous la barre haute et aligné à droite : c'est le seul coin
+            // du viseur qu'aucune commande n'occupe, et il faut pouvoir cadrer
+            // sans que l'histogramme recouvre le sujet.
+            if camera.outils.histogramme, !camera.histogramme.estVide {
+                HStack {
+                    Spacer(minLength: 0)
+                    VueHistogramme(donnees: camera.histogramme)
+                        .frame(width: 148, height: 62)
+                }
+                .padding(.horizontal, Theme.Espace.margeSection)
+                .padding(.top, 8)
+                .transition(.opacity)
+            }
+
+            if outilsOuverts {
+                HStack {
+                    Spacer(minLength: 0)
+                    panneauOutils
+                }
+                .padding(.horizontal, Theme.Espace.margeSection)
+                .padding(.top, 8)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
             Spacer(minLength: 0)
             panneauBas
         }
@@ -226,6 +275,101 @@ struct VueCamera: View {
         let court = infos?["CFBundleShortVersionString"] as? String ?? "?"
         let build = infos?["CFBundleVersion"] as? String ?? "?"
         return "v\(court) (\(build))"
+    }
+
+    /// Une aide est-elle armée ? Sert à teinter le bouton d'accès : un outil
+    /// actif alors que le panneau est refermé doit rester signalé, sans quoi on
+    /// se demande d'où viennent les hachures vertes à l'écran.
+    private var outilsActifs: Bool {
+        camera.outils.zebras || camera.outils.peaking
+            || camera.outils.grille || camera.outils.histogramme
+            || camera.vueNeutre || camera.format != .natif
+    }
+
+    /// PANNEAU DES OUTILS PROFESSIONNELS.
+    ///
+    /// Repliable, et refermé par défaut : ces réglages se posent une fois puis
+    /// s'oublient, et les laisser en permanence à l'écran mangerait le cadrage
+    /// — or le viseur est ce qu'on est venu regarder.
+    private var panneauOutils: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("OUTILS")
+                .font(.system(size: 11, weight: .bold))
+                .tracking(1.6)
+                .foregroundColor(Theme.Couleur.texteAttenue)
+
+            interrupteur("Vue neutre", "eye.slash",
+                         actif: camera.vueNeutre) { camera.vueNeutre.toggle() }
+            interrupteur("Focus peaking", "camera.filters",
+                         actif: camera.outils.peaking) { camera.outils.peaking.toggle() }
+            interrupteur("Zébras", "sun.max",
+                         actif: camera.outils.zebras) { camera.outils.zebras.toggle() }
+            interrupteur("Grille des tiers", "grid",
+                         actif: camera.outils.grille) { camera.outils.grille.toggle() }
+            interrupteur("Histogramme", "waveform",
+                         actif: camera.outils.histogramme) { camera.outils.histogramme.toggle() }
+
+            Divider().overlay(Theme.Couleur.texteAttenue.opacity(0.3))
+
+            Text("FORMAT")
+                .font(.system(size: 11, weight: .bold))
+                .tracking(1.6)
+                .foregroundColor(Theme.Couleur.texteAttenue)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(FormatPhoto.allCases) { format in
+                        Button {
+                            camera.format = format
+                        } label: {
+                            Text(format.titre)
+                                .font(.system(size: 13, weight: .semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(camera.format == format
+                                            ? Theme.Couleur.orange
+                                            : Color.white.opacity(0.12),
+                                            in: Capsule())
+                                .foregroundColor(camera.format == format
+                                                 ? Theme.Couleur.texteSurAccent
+                                                 : Theme.Couleur.texte)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 1)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: 320, alignment: .leading)
+        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 18,
+                                                               style: .continuous))
+    }
+
+    private func interrupteur(_ titre: String,
+                              _ symbole: String,
+                              actif: Bool,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: symbole)
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 22)
+                Text(titre)
+                    .font(.system(size: 15, weight: .medium))
+                Spacer(minLength: 8)
+                // Pastille pleine ou vide plutôt qu'un `Toggle` : le style
+                // système impose un vert qui jure avec l'orange de l'app, et se
+                // redessine mal sur un fond translucide.
+                Circle()
+                    .fill(actif ? Theme.Couleur.orange : Color.white.opacity(0.18))
+                    .frame(width: 18, height: 18)
+            }
+            .foregroundColor(actif ? Theme.Couleur.orange : Theme.Couleur.texte)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(actif ? [.isSelected] : [])
     }
 
     private var barreHaute: some View {
@@ -262,6 +406,19 @@ struct VueCamera: View {
             }
 
             Spacer(minLength: 0)
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) { outilsOuverts.toggle() }
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(outilsOuverts || outilsActifs
+                                     ? Theme.Couleur.orange : Theme.Couleur.texte)
+                    .frame(width: 42, height: 42)
+                    .background(Color.black.opacity(0.45), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Outils professionnels")
 
             Button {
                 camera.basculerCamera()

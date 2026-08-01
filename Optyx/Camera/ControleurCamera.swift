@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreImage
+import CoreImage.CIFilterBuiltins
 import CoreMedia
 import ImageIO
 import Photos
@@ -103,6 +104,23 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// `accuserRetour()`.
     @Published var retourCapture: RetourCapture?
 
+    /// Aides visuelles du viseur. Elles ne touchent QUE l'affichage — voir
+    /// `ReglagesOutils`.
+    @Published var outils = ReglagesOutils() { didSet { recopierOutils() } }
+
+    /// Cadrage de la photo. Appliqué AVANT la chaîne d'effets.
+    @Published var format: FormatPhoto = .natif { didSet { recopierOutils() } }
+
+    /// VUE NEUTRE : le moteur est entièrement court-circuité, le viseur montre
+    /// le flux du capteur tel quel. C'est l'outil de comparaison — juger un
+    /// rendu suppose de voir ce à quoi on le compare, et un curseur d'intensité
+    /// à zéro ne donne pas la même chose (il laisse la chaîne s'exécuter).
+    @Published var vueNeutre = false { didSet { recopierOutils() } }
+
+    /// Répartition des tons du rendu AFFICHÉ. Vide tant que l'histogramme n'est
+    /// pas demandé.
+    @Published private(set) var histogramme: DonneesHistogramme = .vide
+
     /// Un enregistrement vidéo est-il en cours ? Pilote le bouton et le
     /// chronomètre.
     @Published private(set) var enregistrementEnCours = false
@@ -182,6 +200,37 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// Dernière seconde publiée. Évite trente sauts sur le fil principal par
     /// seconde pour une valeur qui ne change qu'une fois.
     private var secondesPubliees = -1
+
+    /// Compteur de trames pour la cadence réduite de l'histogramme.
+    /// `fileVideo` uniquement.
+    private var compteurHistogramme = 0
+
+    /// Copies protégées par `verrouReglages`, lues à chaque trame sur
+    /// `fileVideo`. Les `@Published` correspondants appartiennent au fil
+    /// principal : les lire depuis la file vidéo serait une course de données,
+    /// trente fois par seconde.
+    ///
+    /// SUFFIXE `Verrouille` ET NON PRÉFIXE `_`, contrairement à `_lens` et
+    /// `_intensite` juste au-dessus. La différence tient à `@Published`, qui
+    /// synthétise DÉJÀ un stockage nommé `_outils`, `_format`, `_vueNeutre` :
+    /// déclarer les nôtres sous ces noms donne « invalid redeclaration of
+    /// synthesized property », erreur qui a cassé la compilation une fois. Le
+    /// motif d'à côté est trompeur parce que `lens` et `intensite`, eux, ne
+    /// sont PAS `@Published` — ce sont des propriétés calculées ordinaires, et
+    /// leur préfixe souligné est donc libre.
+    private var outilsVerrouilles = ReglagesOutils()
+    private var formatVerrouille: FormatPhoto = .natif
+    private var vueNeutreVerrouille = false
+
+    /// Recopie les réglages d'affichage vers leurs doubles verrouillés.
+    /// Appelée depuis le fil principal par les `didSet`.
+    private func recopierOutils() {
+        verrouReglages.lock()
+        outilsVerrouilles = outils
+        formatVerrouille = format
+        vueNeutreVerrouille = vueNeutre
+        verrouReglages.unlock()
+    }
     private let sortiePhoto = AVCapturePhotoOutput()
 
     private let fileSession = DispatchQueue(label: "optyx.camera.session", qos: .userInitiated)
@@ -791,6 +840,55 @@ final class ControleurCamera: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Histogramme
+
+    /// Nombre de classes. 64 et non 256 : au-delà, le tracé n'apporte plus
+    /// aucune information sur un histogramme large de quelques centimètres, et
+    /// la lecture GPU→CPU croît d'autant.
+    private static let classesHistogramme = 64
+
+    /// Mesure la répartition des tons. Appelée sur `fileVideo`.
+    private func mesurerHistogramme(_ image: CIImage, cadre: CGRect) {
+        let classes = Self.classesHistogramme
+        let filtre = CIFilter.areaHistogram()
+        filtre.inputImage = image
+        filtre.extent = cadre
+        filtre.count = classes
+        filtre.scale = 1
+        guard let sortie = filtre.outputImage else { return }
+
+        var brut = [Float](repeating: 0, count: classes * 4)
+        MoteurOptique.contexteImages.render(
+            sortie,
+            toBitmap: &brut,
+            rowBytes: classes * 16,
+            bounds: CGRect(x: 0, y: 0, width: classes, height: 1),
+            format: .RGBAf,
+            colorSpace: nil)
+
+        var rouge = [Float](repeating: 0, count: classes)
+        var vert = rouge
+        var bleu = rouge
+        for classe in 0..<classes {
+            rouge[classe] = brut[classe * 4]
+            vert[classe] = brut[classe * 4 + 1]
+            bleu[classe] = brut[classe * 4 + 2]
+        }
+
+        // Normalisation par le PIC COMMUN aux trois canaux, et non canal par
+        // canal : normaliser séparément ferait monter les trois courbes au même
+        // sommet et effacerait précisément ce qu'on vient lire — la dominante
+        // de couleur. Sur un Takumar, les trois canaux paraîtraient équilibrés.
+        let pic = max(rouge.max() ?? 0, vert.max() ?? 0, bleu.max() ?? 0)
+        guard pic > 0 else { return }
+        let donnees = DonneesHistogramme(rouge: rouge.map { $0 / pic },
+                                         vert: vert.map { $0 / pic },
+                                         bleu: bleu.map { $0 / pic })
+        DispatchQueue.main.async { [weak self] in
+            self?.histogramme = donnees
+        }
+    }
+
     // MARK: - Vidéo
 
     /// Démarre ou arrête l'enregistrement. À appeler depuis le fil principal.
@@ -1102,6 +1200,9 @@ extension ControleurCamera: AVCaptureVideoDataOutputSampleBufferDelegate,
         verrouReglages.lock()
         let objectif = _lens
         let force = _intensite
+        let outilsCourants = outilsVerrouilles
+        let formatCourant = formatVerrouille
+        let neutre = vueNeutreVerrouille
         verrouReglages.unlock()
 
         // Le moteur du studio, sans variante. `cadre` est passé explicitement :
@@ -1144,19 +1245,62 @@ extension ControleurCamera: AVCaptureVideoDataOutputSampleBufferDelegate,
         // ne l'est pas. La bonne correction est côté moteur — supprimer la lecture
         // GPU→CPU en portant la porte comme IMAGE 1×1 étirée au cadre, ce qui est
         // arithmétiquement identique et ne vide aucun pipeline.
-        let rendue = MoteurOptique.appliquer(calee,
-                                             lens: objectif,
-                                             intensite: force,
-                                             cadre: cadre)
+        // RECADRAGE AVANT LE MOTEUR. Le vignettage et les masques sont exprimés
+        // en fraction du cadre : recadrer APRÈS couperait un vignettage calculé
+        // pour un cadre plus large, et les coins d'un 1:1 seraient clairs alors
+        // qu'ils devraient être les plus sombres du cadre.
+        let recadree = OutilsPro.recadrer(calee, rapport: formatCourant.rapport)
+        let cadreEffectif = recadree.extent
+        let largeurUtile = max(2, Int(cadreEffectif.width.rounded(.down))) & ~1
+        let hauteurUtile = max(2, Int(cadreEffectif.height.rounded(.down))) & ~1
+        let cadreRendu = CGRect(x: cadreEffectif.minX, y: cadreEffectif.minY,
+                                width: CGFloat(largeurUtile),
+                                height: CGFloat(hauteurUtile))
 
-        guard let cible = tampon(largeur: largeur, hauteur: hauteur) else { return }
+        // VUE NEUTRE : la chaîne est court-circuitée, pas mise à zéro. Passer
+        // une intensité nulle laisserait le graphe s'exécuter pour un résultat
+        // identique — du travail GPU intégralement perdu, à trente trames par
+        // seconde.
+        let rendue = neutre
+            ? recadree
+            : MoteurOptique.appliquer(recadree,
+                                      lens: objectif,
+                                      intensite: force,
+                                      cadre: cadreRendu)
+
+        guard let cible = tampon(largeur: largeurUtile, hauteur: hauteurUtile) else { return }
 
         MoteurOptique.contexteImages.render(rendue,
                                             to: cible,
-                                            bounds: cadre,
+                                            bounds: cadreRendu,
                                             colorSpace: espaceViseur)
 
-        emettre(CIImage(cvPixelBuffer: cible))
+        // HISTOGRAMME — mesuré sur le rendu AFFICHÉ, jamais sur le flux brut :
+        // il doit décrire l'image qu'on va enregistrer, pas celle que le capteur
+        // a livrée. Un histogramme du brut annoncerait des hautes lumières que
+        // le vignettage et la dérive du verre auront déplacées.
+        //
+        // Calculé sur `fileVideo` et non sur une file dédiée, à dessein : le
+        // tampon appartient à un anneau de trois et sera réécrit sous peu. Le
+        // lire depuis une autre file serait une course, et l'histogramme
+        // décrirait par intermittence une trame plus récente que celle affichée.
+        //
+        // Une trame sur six : la mesure est un aller-retour GPU→CPU, donc un
+        // vidage de pipeline. À trente par seconde elle coûterait plus que tout
+        // le reste de la chaîne, pour un tracé que l'œil ne peut pas suivre.
+        if outilsCourants.histogramme {
+            compteurHistogramme += 1
+            if compteurHistogramme % 6 == 0 {
+                mesurerHistogramme(CIImage(cvPixelBuffer: cible), cadre: cadreRendu)
+            }
+        }
+
+        // AIDES VISUELLES — posées sur une COPIE destinée au seul écran, et
+        // après que le tampon a été écrit. Ni la photo ni la vidéo ne les
+        // portent : des zébras gravés dans un fichier seraient une catastrophe
+        // silencieuse, découverte des semaines plus tard.
+        emettre(OutilsPro.aides(sur: CIImage(cvPixelBuffer: cible),
+                                reglages: outilsCourants))
 
         // ENREGISTREMENT — le MÊME tampon que celui qui vient d'être affiché.
         // Aucun filtre n'est réexécuté : le fichier ne peut donc pas différer
@@ -1217,6 +1361,13 @@ extension ControleurCamera: AVCapturePhotoCaptureDelegate {
 
         let objectif = lens
         let force = intensite
+        // Cadrage et vue neutre lus SOUS VERROU, comme au viseur : ce sont les
+        // mêmes réglages, et la photo doit sortir dans le format que
+        // l'utilisateur voyait au moment du déclenchement.
+        verrouReglages.lock()
+        let rapportCourant = formatVerrouille.rapport
+        let neutreCourant = vueNeutreVerrouille
+        verrouReglages.unlock()
 
         // `fileCapture`, surtout pas `fileVideo` : un rendu à 3200 px prend
         // plusieurs centaines de millisecondes et gèlerait le viseur pendant
@@ -1227,7 +1378,9 @@ extension ControleurCamera: AVCapturePhotoCaptureDelegate {
             let developpee = MoteurOptique.rendre(donnees: donnees,
                                                   lens: objectif,
                                                   intensite: force,
-                                                  coteMax: MoteurOptique.coteExport)
+                                                  coteMax: MoteurOptique.coteExport,
+                                                  rapport: rapportCourant,
+                                                  neutre: neutreCourant)
 
             // FILET DE DERNIER RECOURS : si le développement échoue de bout en
             // bout, on enregistre les octets d'origine plutôt que rien. On ne
