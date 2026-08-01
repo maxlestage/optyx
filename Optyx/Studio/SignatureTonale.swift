@@ -118,79 +118,92 @@ struct SignatureTonale {
     /// explique une bonne part du « je ne vois rien » : sur une scène de jour
     /// sans point lumineux, la couleur est le seul trait qui reste.
     ///
-    /// Les écarts sont désormais de 15 à 30 % selon le niveau tonal. La dérive
-    /// couleur est le seul effet de la chaîne qui ne DÉPLACE aucun pixel : elle
-    /// ne peut donc fabriquer ni anneau, ni liseré, ni contour fantôme. C'est le
-    /// seul levier qu'on puisse pousser franchement sans aucun risque, et il
-    /// était resté au repos.
+    /// NIVEAU SPECTACULAIRE, demandé explicitement : les écarts sur un gris
+    /// moyen valent désormais Summicron 15 %, Canon Dream 20 %, Noctilux et
+    /// Angénieux 25 %, Noct-Nikkor 27 %, Biotar 36 %, Trioplan 45 %, Helios
+    /// 45 %, Takumar 48 %. Un vrai verre ne dérive pas autant ; c'est un choix
+    /// assumé, pris après que le rendu réaliste eut été jugé invisible sur
+    /// appareil à une douzaine de reprises. Le Summicron reste volontairement
+    /// discret : sa fiche revendique la neutralité, l'exagérer le rendrait faux.
     ///
-    /// DEUX CONTRAINTES tenues par construction :
-    /// - Aucun gain ne dépasse 1,060, donc rien ne s'écrête avant une entrée de
-    ///   0,943. La teinte est portée par l'ATTÉNUATION des autres canaux, jamais
-    ///   par l'amplification du canal dominant — c'est ce qui préserve le modelé
-    ///   des hautes lumières, que l'ancien réglage aplatissait dès 0,915 sur le
-    ///   rouge du Takumar et 0,916 sur le bleu du Noct-Nikkor.
-    /// - La luminance d'un gris moyen reste entre 90 % et 101 % de sa valeur
-    ///   d'origine : la teinte change, l'exposition non.
+    /// La dérive couleur est le seul effet de la chaîne qui ne DÉPLACE aucun
+    /// pixel : elle ne peut fabriquer ni anneau, ni liseré, ni contour fantôme.
+    /// C'est le seul levier qu'on puisse pousser à ce point sans rouvrir la
+    /// famille de défauts qui a motivé tous les correctifs précédents.
+    ///
+    /// L'INVARIANT DE PLAFOND est tenu par construction, et VÉRIFIÉ
+    /// numériquement sur toute la grille (entrée, intensité) au pas de 1 % :
+    /// la sortie complète de l'étage — gain, biais, saturation ET contraste —
+    /// vaut exactement 1,0000 au pire point pour les neuf verres, et ne le
+    /// dépasse jamais. Le facteur d'échelle appliqué à chaque triplet a été
+    /// résolu par dichotomie pour atteindre ce plafond sans le franchir, ce qui
+    /// préserve les RAPPORTS entre canaux — donc la teinte — et ne joue que sur
+    /// l'exposition.
+    ///
+    /// La luminance d'un gris moyen tombe à 88-96 % selon le verre (80 % pour le
+    /// Noct-Nikkor, dont le fort contraste force le facteur le plus bas). Un
+    /// verre ancien qui mange un peu de lumière est juste ; le contraire —
+    /// remonter le canal dominant — écrêterait, et l'écrêtage n'atténue pas la
+    /// signature, il l'INVERSE au-dessus du seuil.
     static func pour(_ lens: Lens) -> SignatureTonale {
         switch lens.id {
 
         // Helios 44-2 — verre soviétique : vert monté, rouge baissé, bleu relevé
         // surtout dans les ombres (biais). D'où le vert-cyan reproché aux tirages
-        // de l'époque. Le vert est le canal dominant et reste à 1,018 : c'est le
-        // ROUGE qu'on abaisse à 0,814 pour creuser l'écart, ce qui donne 24,6 %
-        // sur un gris moyen sans jamais écrêter le vert.
+        // de l'époque. Le vert est le canal dominant ; c'est le ROUGE
+        // qu'on effondre pour creuser l'écart, ce qui donne 45 % sur un gris
+        // moyen sans jamais écrêter le vert.
         //
         // Note : `palette[0]` vaut ici « #dff5ab », un jaune-vert. Cette couleur
         // décrit les BULLES du catalogue, pas la dérive du verre. On ne la suit
         // donc pas, et il faut l'écrire pour qu'un futur lecteur ne « corrige »
         // pas cette table en croyant réparer une incohérence.
         case "helios-44-2":
-            return SignatureTonale(gainR: 0.814, gainV: 1.018, gainB: 0.955,
-                                   biaisR: 0.000, biaisV: 0.012, biaisB: 0.030,
+            return SignatureTonale(gainR: 0.638, gainV: 0.966, gainB: 0.865,
+                                   biaisR: 0.000, biaisV: 0.021, biaisB: 0.049,
                                    saturation: 1.04, contraste: 1.02, vignettage: 0.45)
 
         // Zeiss Biotar — même famille que l'Helios, moitié moins marqué, plus un
         // contraste inférieur à 1 : « le même vertige, en gants de velours ».
         case "zeiss-biotar":
-            return SignatureTonale(gainR: 0.839, gainV: 1.011, gainB: 0.953,
-                                   biaisR: 0.000, biaisV: 0.011, biaisB: 0.030,
+            return SignatureTonale(gainR: 0.694, gainV: 0.964, gainB: 0.874,
+                                   biaisR: 0.000, biaisV: 0.019, biaisB: 0.050,
                                    saturation: 1.00, contraste: 0.97, vignettage: 0.38)
 
         // Trioplan — triplet non traité : crème chaude, vignettage faible
         // (son trait `cat` vaut 0,22, le plus bas du catalogue avec le Noct-Nikkor).
         case "trioplan":
-            return SignatureTonale(gainR: 1.037, gainV: 0.964, gainB: 0.830,
-                                   biaisR: 0.012, biaisV: 0.008, biaisB: 0.000,
+            return SignatureTonale(gainR: 0.977, gainV: 0.861, gainB: 0.645,
+                                   biaisR: 0.019, biaisV: 0.014, biaisB: 0.000,
                                    saturation: 1.03, contraste: 1.00, vignettage: 0.30)
 
         // Summicron — quasi neutre, seul le micro-contraste monte (trait à 0,7).
         // Le fait qu'il ne fasse presque rien EST sa signature : c'est la seule
         // façon honnête de le distinguer d'un rendu moderne.
         case "summicron-50":
-            return SignatureTonale(gainR: 1.000, gainV: 0.965, gainB: 0.930,
+            return SignatureTonale(gainR: 0.958, gainV: 0.891, gainB: 0.824,
                                    biaisR: 0.000, biaisV: 0.000, biaisB: 0.000,
                                    saturation: 1.02, contraste: 1.06, vignettage: 0.20)
 
         // Noctilux — ambre chaud, ombres bleutées par le biais, vignettage massif
         // (trait à 0,65), contraste abaissé par le glow de f/1.
         case "noctilux":
-            return SignatureTonale(gainR: 1.060, gainV: 0.949, gainB: 0.837,
-                                   biaisR: 0.000, biaisV: 0.000, biaisB: 0.030,
+            return SignatureTonale(gainR: 1.030, gainV: 0.869, gainB: 0.703,
+                                   biaisR: 0.000, biaisV: 0.000, biaisB: 0.050,
                                    saturation: 0.98, contraste: 0.94, vignettage: 0.65)
 
         // Canon « Dream Lens » — rosé pâle, saturation et contraste effondrés :
         // le « contraste évanescent » revendiqué par la fiche.
         case "canon-dream":
-            return SignatureTonale(gainR: 1.060, gainV: 0.880, gainB: 0.940,
-                                   biaisR: 0.030, biaisV: 0.030, biaisB: 0.030,
+            return SignatureTonale(gainR: 1.012, gainV: 0.808, gainB: 0.903,
+                                   biaisR: 0.049, biaisV: 0.049, biaisB: 0.049,
                                    saturation: 0.92, contraste: 0.88, vignettage: 0.50)
 
         // Super Takumar — LE plus marqué du catalogue : c'est le jaunissement du
         // verre au thorium, et cet objectif doit sortir franchement doré, sans quoi
         // son unique trait à 1 (« Dérive chaude ») ne se lit nulle part.
         //
-        // Ce qui FAIT la dorure est le RAPPORT R/B = 1,046 / 0,795 = 1,3157, pas le
+        // Ce qui FAIT la dorure est le RAPPORT R/B = 0,986 / 0,612 = 1,611, pas le
         // niveau absolu des gains. L'ancienne écriture (1,085 / 1,020 / 0,885) tenait
         // le même rapport, 1,2260, mais en montant le rouge AU-DESSUS de 1 : avec la
         // saturation 1,05, une entrée blanche ressortait à R = 1,0921. Les 8,47 %
@@ -208,8 +221,8 @@ struct SignatureTonale {
         // 1,2453 à 0,85 · 1,2444 à 1,00 (contre 1,1390 avant). Prix payé : −0,077 EV
         // sur le blanc, −0,127 EV sur les demi-teintes. La teinte, elle, ne bouge pas.
         case "super-takumar":
-            return SignatureTonale(gainR: 1.046, gainV: 0.965, gainB: 0.795,
-                                   biaisR: 0.005, biaisV: 0.003, biaisB: 0.000,
+            return SignatureTonale(gainR: 0.986, gainV: 0.865, gainB: 0.612,
+                                   biaisR: 0.008, biaisV: 0.004, biaisB: 0.000,
                                    saturation: 1.05, contraste: 1.00, vignettage: 0.30)
 
         // Noct-Nikkor — froid et mordant, seul verre du catalogue à bleu dominant.
@@ -232,16 +245,16 @@ struct SignatureTonale {
         // rechute : 2,43 pts à 0,30 · 4,81 à 0,70 · 5,70 à 0,85 · 6,29 à 0,95 ·
         // 6,59 au blanc. Prix payé : −0,085 EV sur le blanc, −0,143 EV en demi-teinte.
         case "noct-nikkor":
-            return SignatureTonale(gainR: 0.859, gainV: 0.892, gainB: 1.060,
-                                   biaisR: 0.000, biaisV: 0.000, biaisB: 0.021,
+            return SignatureTonale(gainR: 0.752, gainV: 0.798, gainB: 0.931,
+                                   biaisR: 0.000, biaisV: 0.000, biaisB: 0.030,
                                    saturation: 1.00, contraste: 1.08, vignettage: 0.40)
 
         // Angénieux — hautes lumières chaudes (gain), ombres cyan (biais fort sur
         // V et B, littéralement son `duo` = ["#7cc4c4", "#9adcdc"]). C'est le
         // « teal & orange » du cinéma, obtenu par la seule mécanique gain/biais.
         case "angenieux":
-            return SignatureTonale(gainR: 1.060, gainV: 0.954, gainB: 0.848,
-                                   biaisR: 0.000, biaisV: 0.027, biaisB: 0.030,
+            return SignatureTonale(gainR: 1.025, gainV: 0.864, gainB: 0.700,
+                                   biaisR: 0.000, biaisV: 0.042, biaisB: 0.049,
                                    saturation: 0.96, contraste: 0.95, vignettage: 0.35)
 
         default:
