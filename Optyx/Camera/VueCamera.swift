@@ -217,6 +217,17 @@ struct VueCamera: View {
         }
     }
 
+    /// « v2.1 (42) » — version commerciale et numéro de build, lus dans le
+    /// bundle. Le numéro de build est attribué par Xcode Cloud à l'archive :
+    /// c'est lui qui identifie une livraison sans ambiguïté, la version
+    /// commerciale seule ne distinguant pas deux builds successifs.
+    static var versionCourte: String {
+        let infos = Bundle.main.infoDictionary
+        let court = infos?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = infos?["CFBundleVersion"] as? String ?? "?"
+        return "v\(court) (\(build))"
+    }
+
     private var barreHaute: some View {
         HStack(alignment: .center, spacing: 12) {
             Text("VISEUR")
@@ -227,6 +238,23 @@ struct VueCamera: View {
                         radius: Theme.Ombre.rayonTitreSurScene,
                         x: 0,
                         y: Theme.Ombre.decalageTitreSurScene)
+
+            // VERSION AFFICHÉE DANS LE VISEUR, et pas seulement au catalogue.
+            //
+            // Ce n'est pas un ornement, c'est un instrument de diagnostic. Il
+            // s'est écoulé une douzaine d'allers-retours pendant lesquels un
+            // rendu était jugé sur une version de TestFlight antérieure aux
+            // correctifs, sans que personne — ni l'auteur, ni moi — puisse le
+            // savoir. Un correctif livré plus vite qu'Apple ne distribue est
+            // indiscernable d'un correctif qui ne marche pas.
+            //
+            // La version est ici parce que c'est ICI qu'on juge le rendu : la
+            // lire suppose sinon de quitter l'écran qu'on est en train
+            // d'évaluer. Elle doit CHANGER à chaque livraison, faute de quoi
+            // elle ne prouve rien.
+            Text(Self.versionCourte)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundColor(Theme.Couleur.orange.opacity(0.65))
 
             Spacer(minLength: 0)
 
