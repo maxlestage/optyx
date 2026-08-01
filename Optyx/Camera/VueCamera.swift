@@ -98,6 +98,9 @@ struct VueCamera: View {
             // contrôleur, et le viseur clignerait au premier changement.
             camera.regler(lens: objectif, intensite: Float(intensite))
             camera.demarrer()
+            // Le zoom suit la focale de l'objectif : un Trioplan 100 mm cadre
+            // presque quatre fois plus serré qu'un 26 mm de téléphone.
+            camera.appliquerZoom(pour: objectif)
         }
         .onDisappear {
             ongletVisible = false
@@ -111,6 +114,7 @@ struct VueCamera: View {
         }
         .onChange(of: objectif) { _, nouvel in
             camera.regler(lens: nouvel, intensite: Float(intensite))
+            camera.appliquerZoom(pour: nouvel)
         }
         .onChange(of: intensite) { _, nouvelle in
             // Aucun anti-rebond ici, contrairement au studio : le viseur ne
@@ -399,6 +403,16 @@ struct VueCamera: View {
             Text(Self.versionCourte)
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundColor(Theme.Couleur.orange.opacity(0.65))
+
+            // Zoom courant. Il n'est pas décoratif : c'est la seule façon de
+            // savoir que changer d'objectif a bien changé le CADRAGE, et pas
+            // seulement le rendu.
+            Text(String(format: "×%.1f", camera.zoom))
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(Theme.Couleur.texte.opacity(0.75))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(.black.opacity(0.45), in: Capsule())
 
             if camera.enregistrementEnCours {
                 chronometre
