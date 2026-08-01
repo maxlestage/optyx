@@ -102,6 +102,25 @@ struct SignatureTonale {
     /// Amplitude du vignettage global, dans [0, 1].
     let vignettage: CGFloat
 
+    /// MICRO-CONTRASTE — la signature des verres PRÉCIS, dans [0, 1].
+    ///
+    /// Elle manquait entièrement au moteur, et c'est ce qui rendait deux
+    /// objectifs sur neuf indiscernables du flux brut. Le Summicron et le
+    /// Noct-Nikkor ne se reconnaissent NI à un défaut, ni à une dérive : leur
+    /// réputation tient au piqué et à la séparation des micro-tons. Un moteur
+    /// qui ne sait qu'ajouter des défauts n'a littéralement rien à leur donner
+    /// — leur rendu était donc l'image nue, teintée de 15 % et vignettée.
+    ///
+    /// C'est le seul paramètre de cette table qui va dans le sens INVERSE des
+    /// autres : partout ailleurs on dégrade, ici on affirme. Il s'applique à
+    /// l'image AVANT la défocalisation, de sorte que la zone nette y gagne et
+    /// que l'arrière-plan, qui va être flouté juste après, n'en garde rien —
+    /// accentuer ce qu'on s'apprête à effacer serait du calcul perdu.
+    ///
+    /// Volontairement nul pour les sept autres : accentuer un Trioplan ou un
+    /// Dream Lens contredirait leur fiche, qui vend précisément la douceur.
+    let microContraste: CGFloat
+
     // MARK: Table des neuf verres
 
     /// Chaque ligne est justifiée dans le commentaire qui la précède. Ce ne sont
@@ -161,21 +180,21 @@ struct SignatureTonale {
         case "helios-44-2":
             return SignatureTonale(gainR: 0.638, gainV: 0.966, gainB: 0.865,
                                    biaisR: 0.000, biaisV: 0.021, biaisB: 0.049,
-                                   saturation: 1.04, contraste: 1.02, vignettage: 0.45)
+                                   saturation: 1.04, contraste: 1.02, vignettage: 0.45, microContraste: 0.00)
 
         // Zeiss Biotar — même famille que l'Helios, moitié moins marqué, plus un
         // contraste inférieur à 1 : « le même vertige, en gants de velours ».
         case "zeiss-biotar":
             return SignatureTonale(gainR: 0.694, gainV: 0.964, gainB: 0.874,
                                    biaisR: 0.000, biaisV: 0.019, biaisB: 0.050,
-                                   saturation: 1.00, contraste: 0.97, vignettage: 0.38)
+                                   saturation: 1.00, contraste: 0.97, vignettage: 0.38, microContraste: 0.00)
 
         // Trioplan — triplet non traité : crème chaude, vignettage faible
         // (son trait `cat` vaut 0,22, le plus bas du catalogue avec le Noct-Nikkor).
         case "trioplan":
             return SignatureTonale(gainR: 0.977, gainV: 0.861, gainB: 0.645,
                                    biaisR: 0.019, biaisV: 0.014, biaisB: 0.000,
-                                   saturation: 1.03, contraste: 1.00, vignettage: 0.30)
+                                   saturation: 1.03, contraste: 1.00, vignettage: 0.30, microContraste: 0.00)
 
         // Summicron — quasi neutre, seul le micro-contraste monte (trait à 0,7).
         // Le fait qu'il ne fasse presque rien EST sa signature : c'est la seule
@@ -183,21 +202,21 @@ struct SignatureTonale {
         case "summicron-50":
             return SignatureTonale(gainR: 0.958, gainV: 0.891, gainB: 0.824,
                                    biaisR: 0.000, biaisV: 0.000, biaisB: 0.000,
-                                   saturation: 1.02, contraste: 1.06, vignettage: 0.20)
+                                   saturation: 1.02, contraste: 1.06, vignettage: 0.20, microContraste: 0.75)
 
         // Noctilux — ambre chaud, ombres bleutées par le biais, vignettage massif
         // (trait à 0,65), contraste abaissé par le glow de f/1.
         case "noctilux":
             return SignatureTonale(gainR: 1.030, gainV: 0.869, gainB: 0.703,
                                    biaisR: 0.000, biaisV: 0.000, biaisB: 0.050,
-                                   saturation: 0.98, contraste: 0.94, vignettage: 0.65)
+                                   saturation: 0.98, contraste: 0.94, vignettage: 0.65, microContraste: 0.00)
 
         // Canon « Dream Lens » — rosé pâle, saturation et contraste effondrés :
         // le « contraste évanescent » revendiqué par la fiche.
         case "canon-dream":
             return SignatureTonale(gainR: 1.012, gainV: 0.808, gainB: 0.903,
                                    biaisR: 0.049, biaisV: 0.049, biaisB: 0.049,
-                                   saturation: 0.92, contraste: 0.88, vignettage: 0.50)
+                                   saturation: 0.92, contraste: 0.88, vignettage: 0.50, microContraste: 0.00)
 
         // Super Takumar — LE plus marqué du catalogue : c'est le jaunissement du
         // verre au thorium, et cet objectif doit sortir franchement doré, sans quoi
@@ -223,7 +242,7 @@ struct SignatureTonale {
         case "super-takumar":
             return SignatureTonale(gainR: 0.986, gainV: 0.865, gainB: 0.612,
                                    biaisR: 0.008, biaisV: 0.004, biaisB: 0.000,
-                                   saturation: 1.05, contraste: 1.00, vignettage: 0.30)
+                                   saturation: 1.05, contraste: 1.00, vignettage: 0.30, microContraste: 0.10)
 
         // Noct-Nikkor — froid et mordant, seul verre du catalogue à bleu dominant.
         // Contraste le plus haut du catalogue (trait « Micro-contraste » 0,85), et
@@ -247,7 +266,7 @@ struct SignatureTonale {
         case "noct-nikkor":
             return SignatureTonale(gainR: 0.752, gainV: 0.798, gainB: 0.931,
                                    biaisR: 0.000, biaisV: 0.000, biaisB: 0.030,
-                                   saturation: 1.00, contraste: 1.08, vignettage: 0.40)
+                                   saturation: 1.00, contraste: 1.08, vignettage: 0.40, microContraste: 0.90)
 
         // Angénieux — hautes lumières chaudes (gain), ombres cyan (biais fort sur
         // V et B, littéralement son `duo` = ["#7cc4c4", "#9adcdc"]). C'est le
@@ -255,7 +274,7 @@ struct SignatureTonale {
         case "angenieux":
             return SignatureTonale(gainR: 1.025, gainV: 0.864, gainB: 0.700,
                                    biaisR: 0.000, biaisV: 0.042, biaisB: 0.049,
-                                   saturation: 0.96, contraste: 0.95, vignettage: 0.35)
+                                   saturation: 0.96, contraste: 0.95, vignettage: 0.35, microContraste: 0.00)
 
         default:
             return repli(pour: lens)
@@ -276,6 +295,6 @@ struct SignatureTonale {
                                gainV: gain(teinte.1),
                                gainB: gain(teinte.2),
                                biaisR: 0, biaisV: 0, biaisB: 0,
-                               saturation: 1.0, contraste: 1.0, vignettage: 0.35)
+                               saturation: 1.0, contraste: 1.0, vignettage: 0.35, microContraste: 0)
     }
 }
