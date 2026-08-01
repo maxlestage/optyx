@@ -209,17 +209,26 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// `fileVideo`. Les `@Published` correspondants appartiennent au fil
     /// principal : les lire depuis la file vidéo serait une course de données,
     /// trente fois par seconde.
-    private var _outils = ReglagesOutils()
-    private var _format: FormatPhoto = .natif
-    private var _vueNeutre = false
+    ///
+    /// SUFFIXE `Verrouille` ET NON PRÉFIXE `_`, contrairement à `_lens` et
+    /// `_intensite` juste au-dessus. La différence tient à `@Published`, qui
+    /// synthétise DÉJÀ un stockage nommé `_outils`, `_format`, `_vueNeutre` :
+    /// déclarer les nôtres sous ces noms donne « invalid redeclaration of
+    /// synthesized property », erreur qui a cassé la compilation une fois. Le
+    /// motif d'à côté est trompeur parce que `lens` et `intensite`, eux, ne
+    /// sont PAS `@Published` — ce sont des propriétés calculées ordinaires, et
+    /// leur préfixe souligné est donc libre.
+    private var outilsVerrouilles = ReglagesOutils()
+    private var formatVerrouille: FormatPhoto = .natif
+    private var vueNeutreVerrouille = false
 
     /// Recopie les réglages d'affichage vers leurs doubles verrouillés.
     /// Appelée depuis le fil principal par les `didSet`.
     private func recopierOutils() {
         verrouReglages.lock()
-        _outils = outils
-        _format = format
-        _vueNeutre = vueNeutre
+        outilsVerrouilles = outils
+        formatVerrouille = format
+        vueNeutreVerrouille = vueNeutre
         verrouReglages.unlock()
     }
     private let sortiePhoto = AVCapturePhotoOutput()
@@ -1191,9 +1200,9 @@ extension ControleurCamera: AVCaptureVideoDataOutputSampleBufferDelegate,
         verrouReglages.lock()
         let objectif = _lens
         let force = _intensite
-        let outilsCourants = _outils
-        let formatCourant = _format
-        let neutre = _vueNeutre
+        let outilsCourants = outilsVerrouilles
+        let formatCourant = formatVerrouille
+        let neutre = vueNeutreVerrouille
         verrouReglages.unlock()
 
         // Le moteur du studio, sans variante. `cadre` est passé explicitement :
@@ -1356,8 +1365,8 @@ extension ControleurCamera: AVCapturePhotoCaptureDelegate {
         // mêmes réglages, et la photo doit sortir dans le format que
         // l'utilisateur voyait au moment du déclenchement.
         verrouReglages.lock()
-        let rapportCourant = _format.rapport
-        let neutreCourant = _vueNeutre
+        let rapportCourant = formatVerrouille.rapport
+        let neutreCourant = vueNeutreVerrouille
         verrouReglages.unlock()
 
         // `fileCapture`, surtout pas `fileVideo` : un rendu à 3200 px prend
