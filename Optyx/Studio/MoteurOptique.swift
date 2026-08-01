@@ -347,7 +347,7 @@ enum MoteurOptique {
             teintee = teintee
                 .clampedToExtent()
                 .applyingFilter("CISharpenLuminance", parameters: [
-                    "inputSharpness": Float(sig.microContraste * k * 0.45),
+                    "inputSharpness": Float(sig.microContraste * k * 0.30),
                     "inputRadius": Float(max(1.0, grandCote * 0.0018))
                 ])
                 .cropped(to: cadre)
@@ -479,7 +479,7 @@ enum MoteurOptique {
         let angleTourbillon = CGFloat(p.swirl) * k * (0.070 / 0.1875)
 
         if p.swirl > 0.02,
-           let masqueTourbillon = masqueCadre(cadre: cadre, debut: 0.70, fin: 0.95) {
+           let masqueTourbillon = masqueCadre(cadre: cadre, debut: 0.50, fin: 0.88) {
 
             // ─────────────────────────────────────────────────────────────────
             // FILÉ TANGENTIEL, et non plus une simple torsion.
@@ -697,7 +697,7 @@ enum MoteurOptique {
                                               // Takumar. Le plafond ne mord
                                               // désormais que sur lui, ce qui
                                               // préserve l'ordre des neuf verres.
-                                              facteur: min(0.45, CGFloat(p.haze) * k * 1.8)))
+                                              facteur: min(0.30, CGFloat(p.haze) * k * 1.3)))
         }
 
         // ─────────────────────────────────────────────────────────────────────
@@ -736,7 +736,7 @@ enum MoteurOptique {
             image = image.applyingFilter("CIVignetteEffect", parameters: [
                 "inputCenter": centre,
                 "inputRadius": Float(refVignettage * 0.62),
-                "inputIntensity": Float(sig.vignettage * k * 0.70),
+                "inputIntensity": Float(sig.vignettage * k * 0.52),
                 "inputFalloff": Float(0.60)
             ])
         }
