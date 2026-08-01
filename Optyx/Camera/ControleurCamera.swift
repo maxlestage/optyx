@@ -846,11 +846,66 @@ extension ControleurCamera: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard !etendue.isInfinite, !etendue.isNull,
               etendue.width >= 8, etendue.height >= 8 else { return }
 
+        // ─────────────────────────────────────────────────────────────────────
         // RÉDUCTION. Seul levier autorisé entre le viseur et l'export : le moteur
         // exprime toutes ses longueurs en fraction du grand côté, donc les deux
         // rendus restent la même image à l'échelle près (voir l'en-tête).
+        //
+        // LANCZOS, et non plus `transformed(by: scaleX:y:)`. Ce n'est pas une
+        // question de goût mais de PRÉFILTRAGE, et c'était un bug de format :
+        // `transformed(by:)` échantillonne en BILINÉAIRE, donc sur une empreinte
+        // de 2×2 texels, quel que soit le facteur de réduction. Ici le facteur
+        // vaut min(1, 900/4032) = 0,2232, soit un pas de 4,48 px capteur entre
+        // deux pixels du viseur : l'empreinte 2×2 ne couvre plus que
+        // (2/4,48)² = 19,9 % de la cellule source. QUATRE pixels capteur sur cinq
+        // ne contribuaient à AUCUN pixel du viseur, et lesquels dépendait de la
+        // phase sous-pixel — c'est-à-dire du tremblement de la main.
+        //
+        // Ce que cela coûtait, mesuré sur une source ponctuelle carrée de S px
+        // capteur, en balayant la phase sur une période complète (4,48 px) :
+        // le T1 de `detecterPoints` (rampe 0,88 → 0,99 sur la luminance absolue)
+        // oscillait de 0,00 à 1,00 pour TOUT S entre 1,7 et 6,4 px capteur —
+        // c'est-à-dire sur toutes les petites sources. Les disques de l'étage C
+        // s'allumaient et s'éteignaient d'une trame à l'autre. En Lanczos, dont
+        // le noyau s'élargit avec la réduction, la crête devient déterministe et
+        // la bande d'indécision du viseur (5,0 à 9,8 px capteur) coïncide avec
+        // celle de l'export (5,2 à 10,1) au lieu de lui être disjointe.
+        //
+        // Le second effet est l'accord des trois cadres, et il ne s'obtient
+        // qu'AVEC la normalisation de `detecterPoints` (MoteurOptique). Seuil de
+        // détection, en px capteur, à t1 moyen = 0,5 :
+        //   configuration                          viseur  aperçu  export  rapport
+        //   bilinéaire + détection non normalisée    4,05    4,48    2,05    2,19
+        //   Lanczos seul                             6,32    4,48    2,05    3,09  ← PIRE
+        //   normalisation seule                      4,05    7,30    6,41    1,80
+        //   Lanczos + normalisation (retenu)         6,32    7,30    6,41    1,16
+        // Les deux corrections vont donc par PAIRE : Lanczos seul éloigne le
+        // viseur du fichier au lieu de l'en rapprocher. Ne pas défaire l'une sans
+        // l'autre.
+        //
+        // `clampedToExtent()` avant, recadrage après (R2 du moteur) : le support
+        // de Lanczos vaut 3/0,2232 = 13,4 px source, soit 3 px de viseur, et sans
+        // le clamp ces 3 px de bordure seraient assombris par le « noir
+        // transparent » de l'extérieur du cadre.
+        // ─────────────────────────────────────────────────────────────────────
         let facteur = min(1, Self.coteViseur / max(etendue.width, etendue.height))
-        let reduite = orientee.transformed(by: CGAffineTransform(scaleX: facteur, y: facteur))
+        let reduite: CIImage
+        if facteur > 0.999 {
+            // Flux déjà plus petit que le côté de travail : rééchantillonner ne
+            // ferait qu'interpoler du vide.
+            reduite = orientee
+        } else {
+            reduite = orientee
+                .clampedToExtent()
+                .applyingFilter("CILanczosScaleTransform", parameters: [
+                    "inputScale": Float(facteur),
+                    "inputAspectRatio": Float(1)
+                ])
+                .cropped(to: CGRect(x: etendue.origin.x * facteur,
+                                    y: etendue.origin.y * facteur,
+                                    width: etendue.width * facteur,
+                                    height: etendue.height * facteur))
+        }
         let brute = reduite.extent
 
         // Dimensions PAIRES : prudence d'alignement de texture, et c'est gratuit.
@@ -875,6 +930,43 @@ extension ControleurCamera: AVCaptureVideoDataOutputSampleBufferDelegate {
         // Le moteur du studio, sans variante. `cadre` est passé explicitement :
         // un flux caméra livre parfois une étendue infinie, et tout le moteur
         // repose sur un cadre fini.
+        //
+        // ─────────────────────────────────────────────────────────────────────
+        // POURQUOI `disquesAutorises` N'EST PAS PASSÉ À `false` ICI
+        // ─────────────────────────────────────────────────────────────────────
+        // La proposition revient périodiquement, et le diagnostic qui la motive
+        // est JUSTE : l'étage C mesure sa porte par un `render(toBitmap:)` 1×1
+        // synchrone, donc un vidage de pipeline trente fois par seconde, et le
+        // graphe qu'il force (CIMorphologyMinimum r = 8,10 px, CIMorphologyMaximum
+        // r = 8,10 px, CIGaussianBlur r = 45,0 px, CIAreaAverage sur
+        // 674×900 = 606 600 px, soit ≈ 41,7 M lectures de texels pour les seules
+        // morphologies) est ensuite RECALCULÉ par le rendu principal. Sur une
+        // scène diurne c'est du travail intégralement perdu : t4 est une rampe
+        // décroissante 0,42 → 0,14 sur l'ambiance locale, donc t4 = 0 partout dès
+        // que l'ambiance dépasse 0,42, la carte de points est noire, et
+        // `CIScreenBlendMode` avec du noir est l'identité exacte.
+        //
+        // Le REMÈDE, lui, est rejeté, et les trois variantes le sont pour la même
+        // raison mesurée :
+        //   • `false` en permanence : le viseur perd des disques qu'il montre
+        //     RÉELLEMENT. Seuil de détection au viseur = 6,32 px capteur (t1 moyen
+        //     0,5, phase balayée sur une période), soit une tête de lampadaire de
+        //     0,30 m jusqu'à 158 m, une ampoule nue de 60 mm jusqu'à 31,6 m, une
+        //     guirlande de 5 mm jusqu'à 2,6 m. Ce n'est pas un cas de coin : c'est
+        //     la scène nocturne entière.
+        //   • `true` une trame sur N : les disques apparaissent 2 fois par seconde
+        //     et disparaissent 28 — un clignotement, pire que les deux extrêmes.
+        //   • porte mémorisée : `appliquer` ne sait pas recevoir une porte déjà
+        //     mesurée, donc mémoriser ne dispense d'aucun calcul. Tant que le
+        //     moteur n'expose pas ce point d'entrée, il n'y a rien à mémoriser.
+        //
+        // Le coût réel est une latence CPU, pas une perte d'images : `fileVideo`
+        // est série et `alwaysDiscardsLateVideoFrames` est posé, donc la cadence
+        // se dégrade proprement. Un viseur qui ment sur le seul étage
+        // spectaculaire est le défaut fondateur de l'app ; une trame plus longue
+        // ne l'est pas. La bonne correction est côté moteur — supprimer la lecture
+        // GPU→CPU en portant la porte comme IMAGE 1×1 étirée au cadre, ce qui est
+        // arithmétiquement identique et ne vide aucun pipeline.
         let rendue = MoteurOptique.appliquer(calee,
                                              lens: objectif,
                                              intensite: force,
