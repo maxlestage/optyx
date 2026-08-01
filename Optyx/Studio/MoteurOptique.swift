@@ -360,7 +360,7 @@ enum MoteurOptique {
         // 31 % du maximum. Un départ à 0 rendrait la moitié basse du curseur
         // inutile.
         // ─────────────────────────────────────────────────────────────────────
-        let rayonFlouRelatif = min(max(0.016 * CGFloat(p.size) * (0.30 + 0.70 * k), 0.0025), 0.030)
+        let rayonFlouRelatif = min(max(0.024 * CGFloat(p.size) * (0.30 + 0.70 * k), 0.0025), 0.045)
 
         var flou = teintee
             .clampedToExtent()
@@ -459,7 +459,7 @@ enum MoteurOptique {
         //     Le déplacement maximal est donc porté à 5,5 % du grand côté, soit
         //     49,5 px au viseur et 176 px à l'export pour l'Helios. C'est un
         //     mouvement franc du fond, qui se lit immédiatement.
-        let angleTourbillon = CGFloat(p.swirl) * k * (0.055 / 0.1875)
+        let angleTourbillon = CGFloat(p.swirl) * k * (0.080 / 0.1875)
 
         if p.swirl > 0.02,
            let masqueTourbillon = masqueCadre(cadre: cadre, debut: 0.70, fin: 0.95) {
@@ -660,7 +660,7 @@ enum MoteurOptique {
             image = image.applyingFilter("CIVignetteEffect", parameters: [
                 "inputCenter": centre,
                 "inputRadius": Float(refVignettage * 0.62),
-                "inputIntensity": Float(sig.vignettage * k * 0.85),
+                "inputIntensity": Float(sig.vignettage * k * 1.10),
                 "inputFalloff": Float(0.60)
             ])
         }

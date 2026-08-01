@@ -256,6 +256,11 @@ struct VueCamera: View {
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundColor(Theme.Couleur.orange.opacity(0.65))
 
+            if camera.enregistrementEnCours {
+                chronometre
+                    .transition(.opacity)
+            }
+
             Spacer(minLength: 0)
 
             Button {
@@ -284,7 +289,7 @@ struct VueCamera: View {
             legendeObjectif
             curseur
             noteRetour
-            declencheur
+            barreDeclencheurs
         }
         .frame(maxWidth: Theme.Espace.largeurMax)
         .frame(maxWidth: .infinity)
@@ -371,6 +376,72 @@ struct VueCamera: View {
     }
 
     // MARK: Déclencheur
+
+    /// Barre du bas : bouton vidéo à gauche, déclencheur au centre.
+    ///
+    /// La vidéo a son PROPRE bouton plutôt qu'un sélecteur de mode. Un mode
+    /// impose de savoir dans lequel on se trouve avant d'agir ; deux boutons se
+    /// lisent d'un coup d'œil, et rien n'interdit de filmer puis de
+    /// photographier dans la seconde.
+    private var barreDeclencheurs: some View {
+        ZStack {
+            declencheur
+
+            HStack {
+                boutonVideo
+                    .padding(.leading, 34)
+                Spacer()
+            }
+        }
+    }
+
+    private var boutonVideo: some View {
+        Button {
+            camera.basculerEnregistrement()
+        } label: {
+            ZStack {
+                Circle()
+                    .strokeBorder(Theme.Couleur.texte.opacity(0.85), lineWidth: 3)
+                    .frame(width: 54, height: 54)
+
+                // Rond plein au repos, CARRÉ pendant l'enregistrement : la même
+                // convention que toutes les apps de capture, immédiatement
+                // comprise sans légende.
+                RoundedRectangle(cornerRadius: camera.enregistrementEnCours ? 5 : 19,
+                                 style: .continuous)
+                    .fill(Color.red)
+                    .frame(width: camera.enregistrementEnCours ? 24 : 38,
+                           height: camera.enregistrementEnCours ? 24 : 38)
+                    .animation(.easeInOut(duration: 0.18),
+                               value: camera.enregistrementEnCours)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(camera.etat != .enMarche || camera.captureEnCours)
+        .opacity(camera.etat == .enMarche && !camera.captureEnCours ? 1 : 0.4)
+        .accessibilityLabel(camera.enregistrementEnCours
+                            ? "Arrêter l'enregistrement"
+                            : "Filmer une vidéo")
+    }
+
+    /// Chronomètre, affiché uniquement pendant l'enregistrement.
+    private var chronometre: some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(Color.red)
+                .frame(width: 9, height: 9)
+            Text(Self.duree(camera.secondesEnregistrees))
+                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .foregroundColor(Theme.Couleur.texte)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.black.opacity(0.55), in: Capsule())
+    }
+
+    static func duree(_ secondes: Int) -> String {
+        String(format: "%02d:%02d", secondes / 60, secondes % 60)
+    }
 
     private var declencheur: some View {
         Button {
