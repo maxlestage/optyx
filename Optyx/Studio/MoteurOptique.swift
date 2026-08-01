@@ -350,12 +350,29 @@ enum MoteurOptique {
         // flou radial légèrement faux est infiniment moins choquant qu'un anneau
         // inventé au bon endroit.
         // ─────────────────────────────────────────────────────────────────────
-        let diagonale = (cadre.width * cadre.width + cadre.height * cadre.height).squareRoot()
+        // CORRECTION — l'ancrage sur la DIAGONALE, calibré sur un cadre 3:2,
+        // s'effondre sur un cadre très allongé, c'est-à-dire précisément sur le
+        // VISEUR d'un iPhone (1206×2622, rapport 2,17).
+        //
+        // La diagonale d'un tel cadre vaut 2,39 fois sa largeur : le disque net
+        // atteignait donc 0,62 fois la largeur, alors que le bord vertical n'est
+        // qu'à 0,50. Le masque valait ZÉRO sur TOUTE la largeur de l'image, et ne
+        // montait qu'aux extrémités haute et basse. Le flou d'arrière-plan — le
+        // trait censé se lire sur n'importe quelle photo — n'existait nulle part
+        // dans le viseur.
+        //
+        // Ancré sur le PETIT CÔTÉ, le masque se comporte à l'identique quel que
+        // soit le format, ce qui est la seule propriété qui compte ici :
+        //   3:2  (800×1200)  → net jusqu'à 272, bord vertical 0,39, coin 1,00
+        //   2,17 (1206×2622) → net jusqu'à 410, bord vertical 0,39, coin 1,00
+        // Le disque net couvre 68 % de la largeur : un visage cadré en pied, qui
+        // se tient au centre, y reste entièrement.
+        let petitCoteCadre = min(cadre.width, cadre.height)
 
         var fond = teintee
         if let masqueFlou = masqueRadial(cadre: cadre,
-                                         rayon0: diagonale * 0.26,
-                                         rayon1: diagonale * 0.46) {
+                                         rayon0: petitCoteCadre * 0.34,
+                                         rayon1: petitCoteCadre * 0.75) {
             fond = flou.applyingFilter("CIBlendWithMask", parameters: [
                 "inputBackgroundImage": teintee,
                 "inputMaskImage": masqueFlou
@@ -438,21 +455,40 @@ enum MoteurOptique {
         // lumières. Exécuté en tout dernier, sur l'image finie.
         // ─────────────────────────────────────────────────────────────────────
         if p.grain > 0.01, let bruit = CIFilter(name: "CIRandomGenerator")?.outputImage {
-            let amplitude = CGFloat(p.grain) * k * 0.32
+            // OSCILLATION du grain, exprimée directement en fraction de la plage
+            // 0…1 — et non plus par un coefficient par canal, qui était la source
+            // d'une panne majeure.
+            //
+            // L'ancien code posait `amplitude = grain·k·0,32` puis SOMMAIT les
+            // trois canaux du bruit dans chaque ligne de la matrice. L'oscillation
+            // réelle valait donc 3·0,32 = 0,96 : le voile balayait presque toute
+            // la plage 0…1. En lumière douce, une source proche de 0 pousse vers
+            // le noir et une source proche de 1 vers le blanc — le voile ne
+            // texturait donc pas l'image, il la REMPLAÇAIT par de la neige. Le
+            // biais recentrait bien la moyenne sur 0,5, ce qui rendait la faute
+            // invisible à la lecture : seul l'écart-type était monstrueux.
+            // L'Angénieux étant le seul verre à `grain` = 1, il était le seul
+            // objectif touché — viseur entièrement en neige.
+            //
+            // 0,14 donne un voile dans [0,43 ; 0,57] : une texture qui se voit à
+            // 100 % sans jamais menacer l'image. Le grain d'un tirage argentique
+            // est une modulation de quelques pour cent, pas un calque opaque.
+            let oscillation = CGFloat(p.grain) * k * 0.14
+            // Un tiers par canal, puisque les trois sont sommés : c'est ce
+            // facteur 3 qui manquait.
+            let parCanal = oscillation / 3
+            let socle = (1 - oscillation) / 2
             let voileGrain = bruit
                 .cropped(to: cadre)
                 // Désaturation puis compression autour de 0,5 : un bruit coloré
                 // virerait la photo au bruit vidéo, et un bruit non recentré
                 // éclaircirait ou assombrirait toute l'image.
                 .applyingFilter("CIColorMatrix", parameters: [
-                    "inputRVector": CIVector(x: amplitude, y: amplitude, z: amplitude, w: 0),
-                    "inputGVector": CIVector(x: amplitude, y: amplitude, z: amplitude, w: 0),
-                    "inputBVector": CIVector(x: amplitude, y: amplitude, z: amplitude, w: 0),
+                    "inputRVector": CIVector(x: parCanal, y: parCanal, z: parCanal, w: 0),
+                    "inputGVector": CIVector(x: parCanal, y: parCanal, z: parCanal, w: 0),
+                    "inputBVector": CIVector(x: parCanal, y: parCanal, z: parCanal, w: 0),
                     "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-                    "inputBiasVector": CIVector(x: (1 - amplitude * 3) / 2,
-                                                y: (1 - amplitude * 3) / 2,
-                                                z: (1 - amplitude * 3) / 2,
-                                                w: 1)
+                    "inputBiasVector": CIVector(x: socle, y: socle, z: socle, w: 1)
                 ])
             image = voileGrain.applyingFilter("CISoftLightBlendMode", parameters: [
                 "inputBackgroundImage": image
