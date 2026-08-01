@@ -197,15 +197,32 @@ enum MoteurOptique {
     ///
     /// Renvoie `nil` si la tâche a été annulée entre deux étapes — l'appelant
     /// jette alors le résultat sans rien afficher.
-    static func rendre(donnees: Data, lens: Lens, intensite: Float, coteMax: CGFloat) -> UIImage? {
+    /// - Parameters:
+    ///   - rapport: cadrage demandé (grand côté / petit côté), appliqué AVANT la
+    ///     chaîne. Le vignettage et les masques du moteur sont exprimés en
+    ///     fraction du cadre : recadrer ensuite couperait un vignettage calculé
+    ///     pour un cadre plus large.
+    ///   - neutre: court-circuite entièrement la chaîne. Sert à enregistrer la
+    ///     photo telle que le capteur la voit quand le viseur est en vue neutre
+    ///     — la promesse « le fichier montre ce que le viseur montrait » vaut
+    ///     aussi dans ce sens-là.
+    static func rendre(donnees: Data,
+                       lens: Lens,
+                       intensite: Float,
+                       coteMax: CGFloat,
+                       rapport: CGFloat? = nil,
+                       neutre: Bool = false) -> UIImage? {
         guard let reduite = imageReduite(donnees: donnees, coteMax: coteMax) else { return nil }
         if Task.isCancelled { return nil }
 
-        guard let base = CIImage(image: reduite) else { return nil }
+        guard let brute = CIImage(image: reduite) else { return nil }
+        let base = OutilsPro.recadrer(brute, rapport: rapport)
         let cadre = base.extent
         guard cadre.width > 0, cadre.height > 0 else { return nil }
 
-        let resultat = appliquer(base, lens: lens, intensite: intensite, cadre: cadre)
+        let resultat = neutre
+            ? base
+            : appliquer(base, lens: lens, intensite: intensite, cadre: cadre)
         if Task.isCancelled { return nil }
 
         guard let cg = contexteImages.createCGImage(resultat, from: cadre) else { return nil }

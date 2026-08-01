@@ -103,6 +103,19 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// `accuserRetour()`.
     @Published var retourCapture: RetourCapture?
 
+    /// Aides visuelles du viseur. Elles ne touchent QUE l'affichage — voir
+    /// `ReglagesOutils`.
+    @Published var outils = ReglagesOutils() { didSet { recopierOutils() } }
+
+    /// Cadrage de la photo. Appliqué AVANT la chaîne d'effets.
+    @Published var format: FormatPhoto = .natif { didSet { recopierOutils() } }
+
+    /// VUE NEUTRE : le moteur est entièrement court-circuité, le viseur montre
+    /// le flux du capteur tel quel. C'est l'outil de comparaison — juger un
+    /// rendu suppose de voir ce à quoi on le compare, et un curseur d'intensité
+    /// à zéro ne donne pas la même chose (il laisse la chaîne s'exécuter).
+    @Published var vueNeutre = false { didSet { recopierOutils() } }
+
     /// Un enregistrement vidéo est-il en cours ? Pilote le bouton et le
     /// chronomètre.
     @Published private(set) var enregistrementEnCours = false
@@ -182,6 +195,24 @@ final class ControleurCamera: NSObject, ObservableObject {
     /// Dernière seconde publiée. Évite trente sauts sur le fil principal par
     /// seconde pour une valeur qui ne change qu'une fois.
     private var secondesPubliees = -1
+
+    /// Copies protégées par `verrouReglages`, lues à chaque trame sur
+    /// `fileVideo`. Les `@Published` correspondants appartiennent au fil
+    /// principal : les lire depuis la file vidéo serait une course de données,
+    /// trente fois par seconde.
+    private var _outils = ReglagesOutils()
+    private var _format: FormatPhoto = .natif
+    private var _vueNeutre = false
+
+    /// Recopie les réglages d'affichage vers leurs doubles verrouillés.
+    /// Appelée depuis le fil principal par les `didSet`.
+    private func recopierOutils() {
+        verrouReglages.lock()
+        _outils = outils
+        _format = format
+        _vueNeutre = vueNeutre
+        verrouReglages.unlock()
+    }
     private let sortiePhoto = AVCapturePhotoOutput()
 
     private let fileSession = DispatchQueue(label: "optyx.camera.session", qos: .userInitiated)
@@ -1102,6 +1133,9 @@ extension ControleurCamera: AVCaptureVideoDataOutputSampleBufferDelegate,
         verrouReglages.lock()
         let objectif = _lens
         let force = _intensite
+        let outilsCourants = _outils
+        let formatCourant = _format
+        let neutre = _vueNeutre
         verrouReglages.unlock()
 
         // Le moteur du studio, sans variante. `cadre` est passé explicitement :
@@ -1144,19 +1178,42 @@ extension ControleurCamera: AVCaptureVideoDataOutputSampleBufferDelegate,
         // ne l'est pas. La bonne correction est côté moteur — supprimer la lecture
         // GPU→CPU en portant la porte comme IMAGE 1×1 étirée au cadre, ce qui est
         // arithmétiquement identique et ne vide aucun pipeline.
-        let rendue = MoteurOptique.appliquer(calee,
-                                             lens: objectif,
-                                             intensite: force,
-                                             cadre: cadre)
+        // RECADRAGE AVANT LE MOTEUR. Le vignettage et les masques sont exprimés
+        // en fraction du cadre : recadrer APRÈS couperait un vignettage calculé
+        // pour un cadre plus large, et les coins d'un 1:1 seraient clairs alors
+        // qu'ils devraient être les plus sombres du cadre.
+        let recadree = OutilsPro.recadrer(calee, rapport: formatCourant.rapport)
+        let cadreEffectif = recadree.extent
+        let largeurUtile = max(2, Int(cadreEffectif.width.rounded(.down))) & ~1
+        let hauteurUtile = max(2, Int(cadreEffectif.height.rounded(.down))) & ~1
+        let cadreRendu = CGRect(x: cadreEffectif.minX, y: cadreEffectif.minY,
+                                width: CGFloat(largeurUtile),
+                                height: CGFloat(hauteurUtile))
 
-        guard let cible = tampon(largeur: largeur, hauteur: hauteur) else { return }
+        // VUE NEUTRE : la chaîne est court-circuitée, pas mise à zéro. Passer
+        // une intensité nulle laisserait le graphe s'exécuter pour un résultat
+        // identique — du travail GPU intégralement perdu, à trente trames par
+        // seconde.
+        let rendue = neutre
+            ? recadree
+            : MoteurOptique.appliquer(recadree,
+                                      lens: objectif,
+                                      intensite: force,
+                                      cadre: cadreRendu)
+
+        guard let cible = tampon(largeur: largeurUtile, hauteur: hauteurUtile) else { return }
 
         MoteurOptique.contexteImages.render(rendue,
                                             to: cible,
-                                            bounds: cadre,
+                                            bounds: cadreRendu,
                                             colorSpace: espaceViseur)
 
-        emettre(CIImage(cvPixelBuffer: cible))
+        // AIDES VISUELLES — posées sur une COPIE destinée au seul écran, et
+        // après que le tampon a été écrit. Ni la photo ni la vidéo ne les
+        // portent : des zébras gravés dans un fichier seraient une catastrophe
+        // silencieuse, découverte des semaines plus tard.
+        emettre(OutilsPro.aides(sur: CIImage(cvPixelBuffer: cible),
+                                reglages: outilsCourants))
 
         // ENREGISTREMENT — le MÊME tampon que celui qui vient d'être affiché.
         // Aucun filtre n'est réexécuté : le fichier ne peut donc pas différer
@@ -1217,6 +1274,13 @@ extension ControleurCamera: AVCapturePhotoCaptureDelegate {
 
         let objectif = lens
         let force = intensite
+        // Cadrage et vue neutre lus SOUS VERROU, comme au viseur : ce sont les
+        // mêmes réglages, et la photo doit sortir dans le format que
+        // l'utilisateur voyait au moment du déclenchement.
+        verrouReglages.lock()
+        let rapportCourant = _format.rapport
+        let neutreCourant = _vueNeutre
+        verrouReglages.unlock()
 
         // `fileCapture`, surtout pas `fileVideo` : un rendu à 3200 px prend
         // plusieurs centaines de millisecondes et gèlerait le viseur pendant
@@ -1227,7 +1291,9 @@ extension ControleurCamera: AVCapturePhotoCaptureDelegate {
             let developpee = MoteurOptique.rendre(donnees: donnees,
                                                   lens: objectif,
                                                   intensite: force,
-                                                  coteMax: MoteurOptique.coteExport)
+                                                  coteMax: MoteurOptique.coteExport,
+                                                  rapport: rapportCourant,
+                                                  neutre: neutreCourant)
 
             // FILET DE DERNIER RECOURS : si le développement échoue de bout en
             // bout, on enregistre les octets d'origine plutôt que rien. On ne
