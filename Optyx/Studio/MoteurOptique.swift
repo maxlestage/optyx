@@ -122,6 +122,28 @@ enum MoteurOptique {
     /// pas du contrôleur de caméra ; si l'une bouge, l'autre doit suivre.
     static let coteGrain: CGFloat = 900
 
+    /// `inputRadius` du vortex, en fraction du grand côté.
+    ///
+    /// C'est la portée au-delà de laquelle `CIVortexDistortion` ne tourne plus :
+    /// son profil est θ(r) = angle·(1 − r/R), maximal AU CENTRE et nul en R.
+    /// C'est l'inverse d'un tourbillon optique réel, où le champ tournoie
+    /// d'autant plus qu'on s'éloigne de l'axe — d'où le masque qui ne garde que
+    /// la couronne.
+    ///
+    /// Mais tant que R valait 0,75·grandCôté, ce masque gardait précisément la
+    /// zone la plus faible : le coin d'un cadre 674×900 est à r = 562 px, donc à
+    /// θ = 0,167·angle. Les bords ne recevaient qu'un sixième de la rotation, et
+    /// aucune amplitude ne pouvait corriger ce déséquilibre — elle l'aurait
+    /// creusé. À 1,10 le même coin reçoit 0,432·angle, soit 2,6 fois plus, et le
+    /// profil devient assez plat pour que toute la couronne tourne ensemble.
+    ///
+    /// La constante est LUE à trois endroits — l'angle, le nombre de copies du
+    /// filé, le rayon dans le repère réduit. Elle était écrite en dur aux trois,
+    /// ce qui rendait toute modification silencieusement incohérente : changer le
+    /// rayon sans changer le calcul du nombre de copies aurait sous-échantillonné
+    /// le filé et ramené les fantômes.
+    static let rayonTourbillonRelatif: CGFloat = 1.10
+
     /// Grille de référence de la DÉTECTION DE POINTS, en pixels du grand côté.
     ///
     /// Même principe que `coteGrain`, et même panne à la racine : `detecterPoints`
@@ -476,59 +498,90 @@ enum MoteurOptique {
         //     Le déplacement maximal est donc porté à 5,5 % du grand côté, soit
         //     49,5 px au viseur et 176 px à l'export pour l'Helios. C'est un
         //     mouvement franc du fond, qui se lit immédiatement.
-        // ARC PORTÉ À 40,0 % DU GRAND CÔTÉ (7,0 % → 15,0 % → 40,0 %).
+        // HISTORIQUE DE L'ARC : 7,0 % → 15,0 % → 40,0 % → 60,0 % du grand côté.
         //
-        // Le réglage à 15 % ne se lisait pas sur appareil, et la raison n'est pas
-        // qu'il était petit : c'est qu'il DÉDOUBLAIT. Le nombre de copies était
-        // plafonné à 16, et le plafond mordait — pour l'Helios, 135 px d'arc au
-        // viseur répartis sur 16 copies les espacent de 9,0 px pour un rayon de
+        // Le réglage à 15 % ne se lisait pas sur appareil, et la raison n'était pas
+        // qu'il était petit : c'est qu'il DÉDOUBLAIT. Le nombre de copies du filé
+        // était plafonné à 16, et le plafond mordait — pour l'Helios, 135 px d'arc
+        // au viseur répartis sur 16 copies les espacent de 9,0 px pour un rayon de
         // flou de 7,9 px, soit un écart de 1,14 rayon. Au-delà de 1, deux copies
         // successives ne se recouvrent plus : on ne voit pas une traînée mais des
         // fantômes discrets, et l'œil lit du bougé, pas un tourbillon.
         //
-        // Le plafond passe donc à 48 et le filé descend à 30 % de résolution au
-        // lieu de 50 %. Le coût d'une torsion variant comme le CARRÉ de l'échelle,
-        // 48 copies à 0,30 coûtent 48·0,09 = 4,32 unités contre 16·0,25 = 4,00
-        // aujourd'hui : l'arc est multiplié par 2,7 pour 6 % de calcul en plus, et
-        // les huit autres verres deviennent moins chers. Mesuré, à k = 1 :
+        // C'EST LA LEÇON DE CET ÉTAGE, et elle vaut pour toute modification à
+        // venir : ce qui décide qu'un filé se lit comme un tourbillon n'est pas son
+        // amplitude mais sa CONTINUITÉ. L'écart entre copies doit rester sous le
+        // rayon de flou. Monter l'arc sans monter le nombre de copies ne renforce
+        // rien : cela transforme une traînée en chapelet de fantômes.
         //
-        //     objectif      angle    arc viseur  arc export  écart/flou  coût
-        //     Helios        2,133    360 px      1280 px       0,99      4,23
-        //     Biotar        1,451    245 px       870 px       0,98      2,70
-        //     Takumar       0,427     72 px       256 px       0,95      0,63
-        //     Dream Lens    0,469     79 px       282 px       0,92      0,54
-        //     Noctilux      0,128     22 px        77 px       0,81      0,36
+        // ARC PORTÉ À 60 %, ET SURTOUT RAYON DU VORTEX ÉLARGI À 1,10 GRAND CÔTÉ.
         //
-        // Tous les écarts repassent SOUS 1 : le filé redevient continu partout,
-        // alors qu'il était discontinu pour l'Helios — le verre dont c'est
-        // précisément la signature. On triple l'amplitude ET on supprime l'artefact.
+        // Le montage travaillait CONTRE LUI-MÊME. `CIVortexDistortion` tourne le
+        // plus AU CENTRE et décroît linéairement jusqu'à s'annuler en
+        // `inputRadius` ; le masque, lui, ne garde que le POURTOUR — c'est-à-dire
+        // très exactement la zone où ce filtre tourne le moins. Avec R = 0,75·L,
+        // le coin du cadre est à r = 562 px pour L = 900, donc à θ = 0,167·angle :
+        // les bords, là où un Helios tournoie le plus, ne recevaient qu'un sixième
+        // de la rotation. Monter encore l'angle n'aurait fait qu'aggraver le
+        // déséquilibre entre le milieu du champ et les coins.
         //
-        // 30 % de résolution est un plancher, pas une marge : le rayon de flou y
-        // vaut 2,4 px pour l'Helios, donc l'image réduite reste correctement
-        // échantillonnée. Descendre plus bas replierait le spectre du calque
-        // défocalisé.
+        // R passe donc à 1,10·L : le même coin reçoit 0,432·angle, soit 2,6 fois
+        // plus, et le profil devient assez plat pour que toute la couronne tourne
+        // ensemble. Déplacement VISIBLE (déplacement × masque du tourbillon ×
+        // masque du flou, mesuré pixel par pixel sur le cadre 674×900) :
+        //
+        //                              médian   90e centile   > 200 px
+        //     arc 40 %, R = 0,75·L     279 px      346 px       51,8 %
+        //     arc 60 %, R = 1,10·L     409 px      536 px       58,4 %
+        //
+        // LE COÛT EST PAYÉ PAR LA RÉSOLUTION DU FILÉ, 30 % → 25 %. Une torsion
+        // coûte le CARRÉ de l'échelle, et il faut 70 copies au lieu de 47 pour
+        // garder la continuité :
+        //
+        //     objectif      angle   arc viseur  arc export  copies  écart  coût
+        //     Helios        2,182     540 px     1920 px      70     0,99  4,38
+        //     Biotar        1,484     367 px     1306 px      44     0,99  2,75
+        //     Takumar       0,436     108 px      384 px      10     0,95  0,62
+        //     Dream Lens    0,480     119 px      422 px       8     0,98  0,50
+        //     Noctilux      0,131      32 px      115 px       5     0,91  0,31
+        //     ─────────────────────────────────────────────────── total  8,56
+        //
+        // contre 8,46 auparavant : +1,2 % de calcul pour 50 % d'arc en plus. Tous
+        // les écarts restent SOUS 1, donc le filé reste continu — c'est la
+        // contrainte qui gouverne tout cet étage, et jamais l'amplitude.
+        //
+        // 25 % est le nouveau plancher, et il est calculé : le rayon de flou réduit
+        // vaut 1,98 px pour l'Helios, 2,16 px pour le Biotar, 4,32 px pour le Dream
+        // Lens. Tous restent au-dessus du pixel, donc le calque défocalisé reste
+        // correctement échantillonné. C'est la dernière marche : à 20 % l'Helios
+        // tomberait à 1,58 px et le repliement mordrait sur ce qu'on étire.
         //
         // L'intensité reste la soupape : l'angle est proportionnel à k, le curseur
-        // ramène donc continûment de 40 % à zéro.
-        let angleTourbillon = CGFloat(p.swirl) * k * (0.40 / 0.1875)
+        // ramène donc continûment de 60 % à zéro.
+        let angleTourbillon = CGFloat(p.swirl) * k * (0.60 / (Self.rayonTourbillonRelatif / 4))
 
-        // COURONNE ÉLARGIE : 0,50–0,88 → 0,35–0,82.
+        // COURONNE : 0,50–0,88 → 0,35–0,82 → 0,40–0,75.
         //
-        // Un tourbillon confiné au pourtour ne se voit pas davantage qu'un
-        // tourbillon faible. Le masque étant normalisé au cadre (u = 1 sur
-        // l'ellipse inscrite, √2 au coin), la part d'aire vaut π/4·u² tant que
-        // u ≤ 1 :
+        // La borne BASSE ne sert à rien sous 0,52 et c'était une erreur de la
+        // pousser à 0,35. Le calque tourbillonné est `flou`, et `flou` n'est
+        // composité sur l'image que par le masque du flou, qui vaut zéro jusqu'à
+        // u = 0,52 : tout ce qui était tordu entre 0,35 et 0,52 était calculé puis
+        // jeté. Elle remonte à 0,40, juste assez sous 0,52 pour qu'aucune
+        // discontinuité ne se voie à la jonction des deux masques.
+        //
+        // C'est la borne HAUTE qui commande, et elle descend de 0,82 à 0,75 : le
+        // tourbillon atteint sa pleine amplitude plus tôt, donc plus près du point
+        // où le flou commence à se montrer. Part d'aire (π/4·u² tant que u ≤ 1) :
         //
         //                        cœur intact   transition   tourbillon plein
         //     0,50 – 0,88           19,6 %       41,2 %          39,2 %
         //     0,35 – 0,82            9,6 %       43,2 %          47,2 %
+        //     0,40 – 0,75           12,6 %       31,6 %          55,8 %
         //
-        // Le sujet reste protégé — le cœur intact du tourbillon (u ≤ 0,35) est
-        // toujours contenu dans l'ellipse nette du flou (u ≤ 0,52) —, mais près de
-        // la moitié du cadre tourne désormais à pleine amplitude au lieu de deux
-        // cinquièmes.
+        // Le sujet reste protégé : le cœur intact du tourbillon (u ≤ 0,40) est
+        // toujours contenu dans l'ellipse nette du flou (u ≤ 0,52).
         if p.swirl > 0.02,
-           let masqueTourbillon = masqueCadre(cadre: cadre, debut: 0.35, fin: 0.82) {
+           let masqueTourbillon = masqueCadre(cadre: cadre, debut: 0.40, fin: 0.75) {
 
             // ─────────────────────────────────────────────────────────────────
             // FILÉ TANGENTIEL, et non plus une simple torsion.
@@ -575,9 +628,9 @@ enum MoteurOptique {
             // 1,14 rayon de flou — au-dessus de 1, donc déjà discontinu. À 40 %
             // d'arc il en faut 47 pour retomber à 0,99. Le coût est absorbé par la
             // résolution réduite ci-dessous, qui descend de 50 % à 30 %.
-            let deplacement = angleTourbillon * grandCote * 0.75 / 4
+            let deplacement = angleTourbillon * grandCote * Self.rayonTourbillonRelatif / 4
             let rayonFlouPx = max(2, grandCote * rayonFlouRelatif)
-            let echantillons = min(48, max(4, Int((deplacement / rayonFlouPx).rounded(.up)) + 1))
+            let echantillons = min(72, max(4, Int((deplacement / rayonFlouPx).rounded(.up)) + 1))
 
             // FILÉ CALCULÉ À 30 % DE RÉSOLUTION.
             //
@@ -599,13 +652,13 @@ enum MoteurOptique {
             // les réutiliser tels quels placerait le centre de rotation au
             // quart du cadre, et le tourbillon s'enroulerait autour d'un point
             // situé en haut à gauche de l'image.
-            let echelleFile: CGFloat = 0.30
+            let echelleFile: CGFloat = 0.25
             let cadreFile = CGRect(x: cadre.minX * echelleFile,
                                    y: cadre.minY * echelleFile,
                                    width: cadre.width * echelleFile,
                                    height: cadre.height * echelleFile)
             let centreFile = CIVector(x: cadreFile.midX, y: cadreFile.midY)
-            let rayonFile = Float(grandCote * 0.75 * echelleFile)
+            let rayonFile = Float(grandCote * Self.rayonTourbillonRelatif * echelleFile)
             let reduite = flou
                 .clampedToExtent()
                 .transformed(by: CGAffineTransform(scaleX: echelleFile, y: echelleFile))
