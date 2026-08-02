@@ -541,9 +541,9 @@ enum MoteurOptique {
         //     objectif      angle   arc viseur  arc export  copies  écart  coût
         //     Helios        2,182     540 px     1920 px      70     0,99  4,38
         //     Biotar        1,484     367 px     1306 px      44     0,99  2,75
-        //     Takumar       0,436     108 px      384 px      10     0,95  0,62
+        //     Noctilux      0,436     108 px      384 px      10     0,95  0,62
         //     Dream Lens    0,480     119 px      422 px       8     0,98  0,50
-        //     Noctilux      0,131      32 px      115 px       5     0,91  0,31
+        //     Takumar       0,131      32 px      115 px       5     0,91  0,31
         //     ─────────────────────────────────────────────────── total  8,56
         //
         // contre 8,46 auparavant : +1,2 % de calcul pour 50 % d'arc en plus. Tous
@@ -626,27 +626,32 @@ enum MoteurOptique {
             // non l'amplitude, qui décide si le filé est une traînée ou une série
             // de fantômes. À 15 % d'arc, seize copies espaçaient l'Helios de
             // 1,14 rayon de flou — au-dessus de 1, donc déjà discontinu. À 40 %
-            // d'arc il en faut 47 pour retomber à 0,99. Le coût est absorbé par la
-            // résolution réduite ci-dessous, qui descend de 50 % à 30 %.
+            // d'arc il en faut 47, et 70 à 60 %, pour retomber sous 1. Le coût est
+            // absorbé par la résolution réduite ci-dessous, à 25 %.
             let deplacement = angleTourbillon * grandCote * Self.rayonTourbillonRelatif / 4
             let rayonFlouPx = max(2, grandCote * rayonFlouRelatif)
             let echantillons = min(72, max(4, Int((deplacement / rayonFlouPx).rounded(.up)) + 1))
 
-            // FILÉ CALCULÉ À 30 % DE RÉSOLUTION.
+            // FILÉ CALCULÉ À 25 % DE RÉSOLUTION.
             //
-            // Quarante-sept torsions plus quarante-six fondus, à pleine
-            // résolution et trente fois par seconde, deviendraient de très loin
-            // le poste le plus lourd de la trame. Or l'image qu'on traite ici est
-            // DÉJÀ défocalisée : elle ne contient, par définition, aucun détail
-            // qu'une réduction pourrait perdre. Le coût d'une torsion variant
-            // comme le CARRÉ de l'échelle, c'est ce facteur qui paie l'arc.
+            // Soixante-dix torsions à pleine résolution, trente fois par seconde,
+            // deviendraient de très loin le poste le plus lourd de la trame. Or
+            // l'image qu'on traite ici est DÉJÀ défocalisée : elle ne contient,
+            // par définition, aucun détail qu'une réduction pourrait perdre. Le
+            // coût d'une torsion variant comme le CARRÉ de l'échelle, c'est ce
+            // facteur qui paie l'arc.
             //
-            // 0,30 EST UN PLANCHER, ET IL EST CALCULÉ. Le rayon de flou réduit
-            // vaut 0,30·7,9 = 2,4 px pour l'Helios, 0,30·8,6 = 2,6 px pour le
-            // Biotar, 0,30·17,3 = 5,2 px pour le Dream Lens : tous au-dessus du
+            // 0,25 EST UN PLANCHER, ET IL EST CALCULÉ. Le rayon de flou réduit
+            // vaut 0,25·7,9 = 1,98 px pour l'Helios, 0,25·8,6 = 2,16 px pour le
+            // Biotar, 0,25·17,3 = 4,32 px pour le Dream Lens : tous au-dessus du
             // pixel, donc le calque défocalisé reste correctement échantillonné.
-            // À 0,20 l'Helios tomberait à 1,6 px et le repliement commencerait à
+            // À 0,20 l'Helios tomberait à 1,58 px et le repliement commencerait à
             // mordre sur ce qu'on essaie justement d'étirer.
+            //
+            // Ce bloc a annoncé « 30 % » pendant une livraison entière alors que
+            // la ligne posait 0,25, en contradiction avec le bloc voisin qui,
+            // lui, disait 25 %. Deux commentaires contradictoires, dont un faux :
+            // le motif dont CLAUDE.md avertit, jusque dans ce fichier.
             //
             // Le centre et le rayon sont recalculés dans le repère réduit :
             // les réutiliser tels quels placerait le centre de rotation au
@@ -674,13 +679,68 @@ enum MoteurOptique {
                     .cropped(to: cadreFile)
             }
 
+            // MAXIMUM, ET NON MOYENNE. C'est LE correctif de cet étage, et il
+            // annule quatre livraisons de raisonnement.
+            //
+            // Une moyenne CONSERVE L'ÉNERGIE. Étaler un détail d'étendue s sur un
+            // arc de longueur L ramène son contraste à s/L — c'est une identité,
+            // pas un effet de bord. Le détail qu'on étire ici est le disque de
+            // bokeh, s = 2·rayonFlou = 15,8 px au viseur pour l'Helios ; à
+            // L = 540 px il n'en restait que 2,9 %. Le filé ÉTAIT construit, il
+            // n'était simplement plus visible.
+            //
+            // D'où le fait, contre-intuitif et pourtant mesuré, que L'AMPLITUDE
+            // ÉTAIT ANTI-CORRÉLÉE À LA VISIBILITÉ : les trois hausses successives
+            // ont chacune DIVISÉ le tourbillon.
+            //
+            //     arc      crête de l'arc laissée par une haute lumière
+            //      7 %       2,27 niveaux
+            //     15 %       1,48
+            //     40 %       0,81
+            //     60 %       0,62      ← le réglage précédent
+            //     ───────────────────────────────────────────────
+            //     sans tourbillon du tout : 4,67
+            //
+            // L'étage EFFAÇAIT donc plus de texture qu'il n'en créait, et chaque
+            // livraison censée le renforcer l'effaçait davantage. C'est la forme
+            // exacte du défaut que CLAUDE.md décrit : du code qui se lit bien et
+            // qui ne peut pas produire ce qu'il annonce.
+            //
+            // Le maximum ne conserve pas l'énergie, il conserve la CRÊTE — ce que
+            // fait l'aberration optique réelle, qui étire le disque en œil-de-chat
+            // sans en diviser la luminance. Mesuré sur la même scène, zone du
+            // tourbillon, en niveaux sur 255 :
+            //
+            //                        crête max   structure locale   dérive
+            //     sans tourbillon       99,5          4,60           —
+            //     moyenne (avant)       49,0          7,28         −5,53
+            //     maximum               99,5         11,38        +10,40
+            //
+            // La crête est intégralement conservée et la structure locale passe à
+            // 2,5 fois celle de l'image sans tourbillon. La longueur de l'arc ne
+            // dilue plus rien : elle ne décide plus que de la LONGUEUR des filés,
+            // ce qui rend enfin l'amplitude réglable dans le bon sens.
+            //
+            // R1 : `CIMaximumCompositing` est explicitement autorisé, et
+            // max(1, 1) = 1 — l'alpha ne bouge pas. Aucune addition.
+            //
+            // PRIX ASSUMÉ ET CHIFFRÉ : la couronne s'éclaircit de 10,4 niveaux en
+            // moyenne, puisque le maximum ne peut qu'ajouter de la lumière. Le
+            // vignettage, appliqué après, en reprend une partie. Si le pourtour
+            // paraît trop clair, c'est l'ARC qu'il faut raccourcir — la dérive lui
+            // est proportionnelle (mesurée +1,8 à 5 % d'arc, +3,5 à 10 %, +4,9 à
+            // 15 %) — et non revenir à la moyenne.
+            //
+            // L'ESPACEMENT DES COPIES RESTE VALIDE. `CIBokehBlur` rend un disque,
+            // donc un noyau à sommet PLAT de 15,8 px de diamètre : deux copies
+            // espacées de 7,83 px se recouvrent largement et leur maximum est lisse.
+            // C'est même deux fois plus serré que nécessaire ; on garde la marge.
             var file = tordre(0)
             for n in 1..<echantillons {
                 let fraction = CGFloat(n) / CGFloat(echantillons - 1)
                 file = tordre(angleTourbillon * fraction)
-                    .applyingFilter("CIDissolveTransition", parameters: [
-                        "inputTargetImage": file,
-                        kCIInputTimeKey: Float(CGFloat(n) / CGFloat(n + 1))
+                    .applyingFilter("CIMaximumCompositing", parameters: [
+                        kCIInputBackgroundImageKey: file
                     ])
             }
 
